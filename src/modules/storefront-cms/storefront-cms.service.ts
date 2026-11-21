@@ -1775,7 +1775,19 @@ export class StorefrontCmsService {
       where: { customerId: customer.id, productId: dto.productId },
     });
     let saved = false;
-    if (existing) {
+    if (dto.action === 'REMOVE') {
+      await this.prisma.wishlist.deleteMany({
+        where: { customerId: customer.id, productId: dto.productId },
+      });
+      saved = false;
+    } else if (dto.action === 'ADD') {
+      if (!existing) {
+        await this.prisma.wishlist.create({
+          data: { customerId: customer.id, productId: dto.productId, variantId: dto.variantId || null },
+        });
+      }
+      saved = true;
+    } else if (existing) {
       await this.prisma.wishlist.deleteMany({
         where: { customerId: customer.id, productId: dto.productId },
       });
@@ -1797,18 +1809,11 @@ export class StorefrontCmsService {
 
   async getMyWishlistProducts(userId: string) {
     const { customer } = await this.resolveOrCreateCustomer(userId);
-    let rows = await this.prisma.wishlist.findMany({
+    const rows = await this.prisma.wishlist.findMany({
       where: { customerId: customer.id },
       orderBy: { createdAt: 'desc' },
       include: { product: { include: this.cardInclude } },
     });
-    if (rows.length === 0) {
-      rows = await this.prisma.wishlist.findMany({
-        orderBy: { createdAt: 'desc' },
-        include: { product: { include: this.cardInclude } },
-        take: 20,
-      });
-    }
     const seen = new Set<string>();
     const list: any[] = [];
     for (const r of rows) {
@@ -1918,13 +1923,7 @@ export class StorefrontCmsService {
             take: 20,
             include: { product: { include: this.cardInclude } },
           }),
-      custWishlists.length > 0
-        ? custWishlists
-        : this.prisma.wishlist.findMany({
-            orderBy: { createdAt: 'desc' },
-            take: 20,
-            include: { product: { include: this.cardInclude } },
-          }),
+      Promise.resolve(custWishlists),
       custOrders.length > 0
         ? custOrders
         : this.prisma.order.findMany({
@@ -3616,6 +3615,31 @@ export class StorefrontCmsService {
   }
 
   private getDefaultSysConfig(key: string) {
+    if (key === 'marketingPixels') {
+      return {
+        metaPixelEnabled: false,
+        metaPixelId: '',
+        facebookDomainVerification: '',
+        tiktokPixelEnabled: false,
+        tiktokPixelId: '',
+        ga4Enabled: false,
+        ga4MeasurementId: '',
+        gtmEnabled: false,
+        gtmContainerId: '',
+        snapPixelEnabled: false,
+        snapPixelId: '',
+        googleSiteVerification: '',
+        seoTitle: 'Royal — Électro de Maison | Électroménager & Cuisine en Tunisie',
+        seoDescription: 'Découvrez notre collection d’électroménager, robots culinaires, cuisson et art de la table en Tunisie. Livraison 24–48h et garantie officielle.',
+        seoKeywords: 'électroménager tunisie, cuisine tunisie, airfryer, robot pétrin, royal tunisie',
+        canonicalBaseUrl: '',
+        robotsIndex: true,
+        trackAddToCart: true,
+        trackPurchase: true,
+        trackWishlist: true,
+        trackViewContent: true,
+      };
+    }
     if (key === 'smtp') {
       return {
         host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -3904,6 +3928,7 @@ export class StorefrontCmsService {
         { key: '/dashboard/reports/interactions', label: 'Interactions', section: 'SEO & Réputation', visibility: 'PRIVATE' },
         { key: '/dashboard/community/newsletters', label: 'Abonnements', section: 'SEO & Réputation', visibility: 'PRIVATE' },
         { key: '/dashboard/seo/testimonials', label: 'Témoignages', section: 'SEO & Réputation', visibility: 'PRIVATE' },
+        { key: '/dashboard/seo/pixels', label: 'Pixels & Référencement SEO', section: 'SEO & Réputation', visibility: 'PRIVATE' },
         // Rapports et statistiques
         { key: '/dashboard/analytics', label: "Conseils d'achat", section: 'Rapports & Statistiques', visibility: 'PRIVATE' },
         { key: '/dashboard/reports/sales', label: 'Ventes et marges', section: 'Rapports & Statistiques', visibility: 'PRIVATE' },
@@ -4634,6 +4659,7 @@ export class StorefrontCmsService {
       'generalSettings',
       'translations',
       'customersMeta',
+      'marketingPixels',
     ];
     if (!allowed.includes(key)) {
       throw new BadRequestException('Clé de configuration invalide.');
@@ -4705,6 +4731,7 @@ export class StorefrontCmsService {
       'generalSettings',
       'translations',
       'customersMeta',
+      'marketingPixels',
     ];
     if (!allowed.includes(key)) {
       throw new BadRequestException('Clé de configuration invalide.');

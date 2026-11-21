@@ -212,6 +212,12 @@ export class ToggleWishlistDto {
   @IsOptional()
   @IsString()
   variantId?: string;
+
+  @ApiPropertyOptional({ enum: ['ADD', 'REMOVE', 'TOGGLE'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['ADD', 'REMOVE', 'TOGGLE'])
+  action?: 'ADD' | 'REMOVE' | 'TOGGLE';
 }
 
 export class ToggleReactionDto {

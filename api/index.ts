@@ -1,4 +1,4 @@
-import mainHandler from '../dist/main';
+import mainHandler from '../dist/src/main';
 
 export default async function handler(req: any, res: any) {
   const fn = typeof mainHandler === 'function' ? mainHandler : (mainHandler as any)?.default;

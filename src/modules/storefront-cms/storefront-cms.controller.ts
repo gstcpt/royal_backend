@@ -681,6 +681,14 @@ export class StorefrontCmsController {
     return this.service.getPublicPrintConfig();
   }
 
+  @Public()
+  @Get('public-marketing-pixels')
+  @ApiOperation({ summary: 'Configuration publique des Pixels Marketing et méta-données SEO' })
+  async getPublicMarketingPixels() {
+    const res = await this.service.getSysConfig('marketingPixels');
+    return res?.value || {};
+  }
+
   @Post('stock-lifecycle/apply')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
