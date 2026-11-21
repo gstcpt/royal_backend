@@ -1,0 +1,198 @@
+{
+  "identity": {
+    "appName": "Royal",
+    "companyName": "Royal — Electro de Maison",
+    "slogan": "Electro de Maison • Équipement Culinaire & Électroménager Tunisie",
+    "logoUrl": "/images/royal-logo.jpg",
+    "faviconUrl": "/icon.png",
+    "email": "royaltn24@gmail.com",
+    "phone": "48 091 914",
+    "whatsapp": "48091914",
+    "address": "Mahdia 5100, Tunisia",
+    "instagram": "https://www.instagram.com/royal_electr",
+    "facebook": "https://www.facebook.com/people/Royaltn/61584896805901",
+    "tiktok": "https://www.tiktok.com/@electrome1",
+    "showrooms": [
+      {
+        "id": "sh-mahdia",
+        "name": "Siège & Showroom Mahdia",
+        "city": "Mahdia 5100",
+        "address": "Mahdia 5100, Tunisia",
+        "phone": "48 091 914",
+        "hours": "Lun–Sam 08h30–19h30"
+      },
+      {
+        "id": "sh-tunis",
+        "name": "Showroom Tunis Lac 2",
+        "city": "Tunis",
+        "address": "Les Berges du Lac 2, 1053 Tunis",
+        "phone": "48 091 914",
+        "hours": "Lun–Sam 09h00–20h00"
+      }
+    ]
+  },
+  "theme": {
+    "primaryHex": "#C59B27",
+    "primaryHoverHex": "#A67C1E",
+    "primaryTextHex": "#FFFFFF",
+    "inkHex": "#1D232E",
+    "goldHex": "#C59B27",
+    "goldDarkHex": "#9A7414",
+    "goldLightHex": "#FBF6E8",
+    "silverHex": "#CBD5E1",
+    "silverLightHex": "#F4F5F7",
+    "backgroundHex": "#FDFCF9",
+    "cardHex": "#FFFFFF",
+    "borderHex": "#E6E1D6",
+    "headingFont": "Poppins",
+    "bodyFont": "Poppins",
+    "arabicFont": "Cairo"
+  },
+  "header": {
+    "announcementText": "Livraison 24–48h partout en Tunisie",
+    "showSearch": true,
+    "showLanguageSwitch": true,
+    "showCompare": true,
+    "showWishlist": true,
+    "showTrackOrder": true
+  },
+  "footer": {
+    "aboutDescription": "Boutique spécialisée en petit et gros électroménager de qualité, arts de la table et équipements culinaires modernes en Tunisie.",
+    "col1Title": "À Propos",
+    "col1Links": [
+      { "label": "Accueil Royal", "href": "/" },
+      { "label": "Tous nos Articles", "href": "/articles" },
+      { "label": "Promotions & Soldes", "href": "/articles?sortBy=promo" }
+    ],
+    "col2Title": "Rayons & Articles",
+    "col2Links": [],
+    "col3Title": "Informations & Aide",
+    "col3Links": [
+      { "label": "Contactez-nous", "href": "/contact" },
+      { "label": "Foire Aux Questions (FAQ)", "href": "/faq" },
+      { "label": "Conditions Générales de Vente", "href": "/terms" },
+      { "label": "Politique de Confidentialité", "href": "/privacy" },
+      { "label": "Suivi de Commande", "href": "/track-order" }
+    ],
+    "col4Title": "Contact & Coordonnées",
+    "copyrightText": "Royal — Électro de Maison (Mahdia, Tunisie). Tous droits réservés."
+  },
+  "heroSlides": [
+    {
+      "id": "slide-1",
+      "tagline": "INNOVATION CULINAIRE & CONFORT",
+      "title": "L’Art de Vivre.",
+      "highlightText": "La Précision Culinaire.",
+      "subtitle": "Découvrez notre collection exclusive d’équipements culinaires, friteuses sans huile, robots pétrins et appareils conçus pour durer.",
+      "primaryCtaText": "Explorer la Collection",
+      "primaryCtaLink": "/articles",
+      "animation": "slide",
+      "imageUrl": "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?auto=format&fit=crop&w=1920&q=90"
+    },
+    {
+      "id": "slide-2",
+      "tagline": "GROS ÉLECTROMÉNAGER & CUISSON",
+      "title": "Fours & Plaques.",
+      "highlightText": "Ingénierie & Performance.",
+      "subtitle": "Chaleur tournante, foyers haute puissance et finitions inox brossé. Équipez votre cuisine avec les références les plus fiables.",
+      "primaryCtaText": "Voir les Nouveautés",
+      "primaryCtaLink": "/articles?sortBy=newest",
+      "animation": "slide",
+      "imageUrl": "https://images.unsplash.com/photo-1556910103-1c02745aae4d?auto=format&fit=crop&w=1920&q=90"
+    },
+    {
+      "id": "slide-3",
+      "tagline": "OFFRES PRIVILÈGES ROYAL",
+      "title": "Équipez Votre Maison.",
+      "highlightText": "Qualité & Prix Directs.",
+      "subtitle": "Profitez de nos promotions actives avec garantie constructeur et livraison rapide partout dans les 24 gouvernorats de Tunisie.",
+      "primaryCtaText": "Voir les Promotions",
+      "primaryCtaLink": "/articles?sortBy=promo",
+      "animation": "slide",
+      "imageUrl": "https://images.unsplash.com/photo-1565538810643-b5bdb714032a?auto=format&fit=crop&w=1920&q=90"
+    }
+  ],
+  "views": {
+    "home": {
+      "showHeroSlider": true,
+      "heroAutoplayMs": 6000,
+      "heroHeightPx": 720,
+      "cardImageHeightPx": 280,
+      "heroAnimation": "slide",
+      "sectionOrder": [
+        "hero",
+        "categories",
+        "valueProps",
+        "newArrivals",
+        "featuredVideo",
+        "topRated",
+        "editorialBanner",
+        "promotions",
+        "newsletter",
+        "lifestyle",
+        "testimonials"
+      ],
+      "showCategoriesCarousel": true,
+      "showValueProps": true,
+      "showNewArrivals": true,
+      "showFeaturedVideo": true,
+      "showTopRated": true,
+      "showEditorialBanner": true,
+      "showPromotions": true,
+      "showLifestyleGallery": true,
+      "showTestimonials": true,
+      "showNewsletter": true,
+      "newArrivalsTitle": "Nouveautés",
+      "newArrivalsSubtitle": "Les dernières références ajoutées à notre catalogue officiel.",
+      "topRatedTitle": "Mieux Notés",
+      "topRatedSubtitle": "Les équipements préférés de nos clients partout en Tunisie.",
+      "promotionsTitle": "Promotions",
+      "promotionsSubtitle": "Profitez de remises immédiates et de prix promo sur nos appareils sélectionnés."
+    },
+    "articles": {
+      "defaultColumns": "4",
+      "defaultItemsPerPage": 24,
+      "cardImageHeightPx": 260,
+      "showCompareButton": true,
+      "showWishlistButton": true,
+      "showQuickViewButton": true,
+      "showBuyButton": true,
+      "showLikeDislike": true,
+      "showSidebarFiltersByDefault": true
+    },
+    "productDetail": {
+      "showReviews": true,
+      "showRatings": true,
+      "showSpecs": true,
+      "showRelatedProducts": true,
+      "showShareButton": true,
+      "showWishlist": true,
+      "showCompare": true,
+      "showLikeDislike": true,
+      "enableImageZoom": true,
+      "enableImageAutoplay": true,
+      "mediaColumnSpan": 7,
+      "galleryHeightPx": 540
+    },
+    "contact": {
+      "showMap": true,
+      "mapHeightPx": 380,
+      "mapEmbedUrl": "https://www.openstreetmap.org/export/embed.html?bbox=11.028%2C35.485%2C11.088%2C35.525&layer=mapnik&marker=35.5047%2C11.0622",
+      "showInfoCards": true,
+      "phoneRequired": true,
+      "emailRequired": false,
+      "subjectRequired": true
+    },
+    "faq": {
+      "title": "Foire Aux Questions",
+      "subtitle": "Trouvez rapidement les réponses à vos questions sur la livraison, la garantie et nos produits.",
+      "showSearch": true
+    },
+    "showrooms": {
+      "layoutStyle": "grid",
+      "showMap": true,
+      "showHours": true,
+      "showPhone": true
+    }
+  }
+}

@@ -1,0 +1,277 @@
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
+import { ProductStatus } from '@prisma/client';
+import { PrismaService } from '../../database/prisma.service';
+import { CreateCategoryDto } from './dto/create-category.dto';
+import { UpdateCategoryDto } from './dto/update-category.dto';
+import { generateSlug } from '@royal/shared-utils';
+
+@Injectable()
+export class CategoriesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Find categories: either flat list or hierarchical tree
+   */
+  async findAll(tree = false) {
+    const activeProductWhere = { status: ProductStatus.ACTIVE, deletedAt: null };
+
+    if (tree) {
+      const topLevel = await this.prisma.category.findMany({
+        where: { parentId: null, isActive: true },
+        orderBy: { sortOrder: 'asc' },
+        include: {
+          children: {
+            where: { isActive: true },
+            orderBy: { sortOrder: 'asc' },
+            include: {
+              children: {
+                where: { isActive: true },
+                orderBy: { sortOrder: 'asc' },
+                include: {
+                  _count: { select: { products: { where: activeProductWhere } } },
+                },
+              },
+              _count: { select: { products: { where: activeProductWhere } } },
+            },
+          },
+          _count: { select: { products: { where: activeProductWhere } } },
+        },
+      });
+
+      const attachCounts = (node: any): any => {
+        const mappedChildren = (node.children || []).map(attachCounts);
+        const directCount = Number(node._count?.products || 0);
+        const childSum = mappedChildren.reduce((sum: number, c: any) => sum + Number(c.productsCount || 0), 0);
+        return {
+          ...node,
+          children: mappedChildren,
+          directProductsCount: directCount,
+          productsCount: directCount + childSum,
+        };
+      };
+
+      return topLevel.map(attachCounts);
+    }
+
+    // Flat list (only active non-deleted products count toward storefront/catalog eligibility)
+    const categories = await this.prisma.category.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      include: {
+        parent: { select: { id: true, name: true, slug: true } },
+        _count: {
+          select: {
+            products: { where: activeProductWhere },
+            children: true,
+          },
+        },
+      },
+    });
+
+    const byParent = new Map<string | null, string[]>();
+    const directMap = new Map<string, number>();
+    for (const cat of categories) {
+      directMap.set(cat.id, cat._count.products);
+      const pid = cat.parentId ?? null;
+      if (!byParent.has(pid)) byParent.set(pid, []);
+      byParent.get(pid)!.push(cat.id);
+    }
+
+    const computeSubtreeCount = (catId: string): number => {
+      let total = directMap.get(catId) || 0;
+      for (const childId of byParent.get(catId) || []) {
+        total += computeSubtreeCount(childId);
+      }
+      return total;
+    };
+
+    return categories.map((cat) => ({
+      ...cat,
+      directProductsCount: cat._count.products,
+      productsCount: computeSubtreeCount(cat.id),
+      childrenCount: cat._count.children,
+    }));
+  }
+
+  /**
+   * Find single category by ID
+   */
+  async findById(id: string) {
+    const category = await this.prisma.category.findUnique({
+      where: { id },
+      include: {
+        parent: true,
+        children: {
+          orderBy: { sortOrder: 'asc' },
+          include: { _count: { select: { products: true } } },
+        },
+        _count: { select: { products: true } },
+      },
+    });
+
+    if (!category) {
+      throw new NotFoundException('Catégorie introuvable');
+    }
+
+    return category;
+  }
+
+  /**
+   * Find category by unique slug
+   */
+  async findBySlug(slug: string) {
+    const category = await this.prisma.category.findUnique({
+      where: { slug },
+      include: {
+        parent: true,
+        children: {
+          where: { isActive: true },
+          orderBy: { sortOrder: 'asc' },
+        },
+        _count: { select: { products: true } },
+      },
+    });
+
+    if (!category) {
+      throw new NotFoundException(`Catégorie avec le slug "${slug}" introuvable`);
+    }
+
+    return category;
+  }
+
+  /**
+   * Create a new category
+   */
+  async create(createCategoryDto: CreateCategoryDto) {
+    const slug = createCategoryDto.slug
+      ? generateSlug(createCategoryDto.slug)
+      : generateSlug(createCategoryDto.name);
+
+    const existing = await this.prisma.category.findUnique({
+      where: { slug },
+    });
+
+    if (existing) {
+      throw new ConflictException(`Une catégorie avec le slug "${slug}" existe déjà`);
+    }
+
+    if (createCategoryDto.parentId) {
+      const parent = await this.prisma.category.findUnique({
+        where: { id: createCategoryDto.parentId },
+      });
+      if (!parent) {
+        throw new NotFoundException('Catégorie parente introuvable');
+      }
+    }
+
+    return this.prisma.category.create({
+      data: {
+        name: createCategoryDto.name,
+        nameAr: createCategoryDto.nameAr || null,
+        slug,
+        description: createCategoryDto.description || null,
+        descriptionAr: createCategoryDto.descriptionAr || null,
+        imageUrl: createCategoryDto.imageUrl || null,
+        parentId: createCategoryDto.parentId || null,
+        sortOrder: createCategoryDto.sortOrder ?? 0,
+        isActive: createCategoryDto.isActive ?? true,
+        showinmenu: createCategoryDto.showinmenu ?? true,
+        metaTitle: createCategoryDto.metaTitle || null,
+        metaDesc: createCategoryDto.metaDesc || null,
+        metaKeywords: createCategoryDto.metaKeywords || null,
+      },
+    });
+  }
+
+  /**
+   * Update category
+   */
+  async update(id: string, updateCategoryDto: UpdateCategoryDto) {
+    const category = await this.prisma.category.findUnique({
+      where: { id },
+    });
+
+    if (!category) {
+      throw new NotFoundException('Catégorie introuvable');
+    }
+
+    let slug = category.slug;
+    if (updateCategoryDto.slug && updateCategoryDto.slug !== category.slug) {
+      slug = generateSlug(updateCategoryDto.slug);
+      const existing = await this.prisma.category.findUnique({
+        where: { slug },
+      });
+      if (existing && existing.id !== id) {
+        throw new ConflictException(`Le slug "${slug}" est déjà utilisé`);
+      }
+    }
+
+    if (updateCategoryDto.parentId && updateCategoryDto.parentId === id) {
+      throw new ConflictException('Une catégorie ne peut pas être son propre parent');
+    }
+
+    return this.prisma.category.update({
+      where: { id },
+      data: {
+        name: updateCategoryDto.name,
+        nameAr: updateCategoryDto.nameAr,
+        slug,
+        description: updateCategoryDto.description,
+        descriptionAr: updateCategoryDto.descriptionAr,
+        imageUrl: updateCategoryDto.imageUrl,
+        parentId: updateCategoryDto.parentId,
+        sortOrder: updateCategoryDto.sortOrder,
+        isActive: updateCategoryDto.isActive,
+        showinmenu: updateCategoryDto.showinmenu,
+        metaTitle: updateCategoryDto.metaTitle,
+        metaDesc: updateCategoryDto.metaDesc,
+        metaKeywords: updateCategoryDto.metaKeywords,
+      },
+    });
+  }
+
+  /**
+   * Delete category
+   */
+  async delete(id: string) {
+    const category = await this.prisma.category.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: {
+            products: true,
+            children: true,
+          },
+        },
+      },
+    });
+
+    if (!category) {
+      throw new NotFoundException('Catégorie introuvable');
+    }
+
+    if (category._count.products > 0) {
+      throw new ConflictException(
+        `Impossible de supprimer : cette catégorie contient ${category._count.products} produit(s).`,
+      );
+    }
+
+    if (category._count.children > 0) {
+      throw new ConflictException(
+        `Impossible de supprimer : cette catégorie possède ${category._count.children} sous-catégorie(s).`,
+      );
+    }
+
+    await this.prisma.category.delete({
+      where: { id },
+    });
+
+    return {
+      success: true,
+      message: 'Catégorie supprimée avec succès',
+    };
+  }
+}
