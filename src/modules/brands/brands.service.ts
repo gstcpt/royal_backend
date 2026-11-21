@@ -118,7 +118,7 @@ export class BrandsService {
     const brand = await this.prisma.brand.findUnique({
       where: { id },
       include: {
-        _count: { select: { products: true } },
+        _count: { select: { products: { where: { deletedAt: null } } } },
       },
     });
 
@@ -131,6 +131,11 @@ export class BrandsService {
         `Impossible de supprimer : cette marque est associée à ${brand._count.products} produit(s).`,
       );
     }
+
+    await this.prisma.product.updateMany({
+      where: { brandId: id, deletedAt: { not: null } },
+      data: { brandId: null },
+    });
 
     await this.prisma.brand.delete({
       where: { id },

@@ -36,7 +36,14 @@ export class ProductsService {
     }
 
     if (categoryId) {
-      where.categoryId = categoryId;
+      where.category = {
+        OR: [
+          { id: categoryId },
+          { parentId: categoryId },
+          { parent: { parentId: categoryId } },
+          { parent: { parent: { parentId: categoryId } } },
+        ],
+      };
     }
 
     if (brandId) {
@@ -207,12 +214,16 @@ export class ProductsService {
 
     if (activeCatSlugs.length > 0) {
       andFilters.push({
-        OR: activeCatSlugs.map((slug) => ({
+        OR: activeCatSlugs.map((slugOrId) => ({
           category: {
             OR: [
-              { slug },
-              { parent: { slug } },
-              { parent: { parent: { slug } } },
+              { slug: slugOrId },
+              { id: slugOrId },
+              { parent: { slug: slugOrId } },
+              { parent: { id: slugOrId } },
+              { parent: { parent: { slug: slugOrId } } },
+              { parent: { parent: { id: slugOrId } } },
+              { parent: { parent: { parent: { slug: slugOrId } } } },
             ],
           },
         })),

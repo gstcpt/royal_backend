@@ -100,15 +100,16 @@ export class CategoriesService {
    * Find single category by ID
    */
   async findById(id: string) {
+    const activeProductWhere = { deletedAt: null };
     const category = await this.prisma.category.findUnique({
       where: { id },
       include: {
         parent: true,
         children: {
           orderBy: { sortOrder: 'asc' },
-          include: { _count: { select: { products: true } } },
+          include: { _count: { select: { products: { where: activeProductWhere } } } },
         },
-        _count: { select: { products: true } },
+        _count: { select: { products: { where: activeProductWhere } } },
       },
     });
 
@@ -123,6 +124,7 @@ export class CategoriesService {
    * Find category by unique slug
    */
   async findBySlug(slug: string) {
+    const activeProductWhere = { deletedAt: null };
     const category = await this.prisma.category.findUnique({
       where: { slug },
       include: {
@@ -131,7 +133,7 @@ export class CategoriesService {
           where: { isActive: true },
           orderBy: { sortOrder: 'asc' },
         },
-        _count: { select: { products: true } },
+        _count: { select: { products: { where: activeProductWhere } } },
       },
     });
 
@@ -237,41 +239,118 @@ export class CategoriesService {
    * Delete category
    */
   async delete(id: string) {
-    const category = await this.prisma.category.findUnique({
-      where: { id },
+    return this.bulkDelete([id], true);
+  }
+
+  async bulkDelete(ids: string[], singleMode = false) {
+    const uniqueIds = Array.from(new Set((ids || []).filter(Boolean)));
+    if (uniqueIds.length === 0) {
+      return { success: true, deletedCount: 0, message: 'Aucune catégorie sélectionnée.' };
+    }
+
+    const targets = await this.prisma.category.findMany({
+      where: { id: { in: uniqueIds } },
       include: {
         _count: {
           select: {
-            products: true,
-            children: true,
+            products: { where: { deletedAt: null } },
           },
         },
       },
     });
 
-    if (!category) {
+    if (targets.length === 0) {
       throw new NotFoundException('Catégorie introuvable');
     }
 
-    if (category._count.products > 0) {
+    const blocking = targets.filter((c) => c._count.products > 0);
+    if (blocking.length > 0) {
+      if (singleMode && blocking.length === 1) {
+        throw new ConflictException(
+          `Impossible de supprimer : cette catégorie contient ${blocking[0]._count.products} produit(s).`,
+        );
+      }
+      const details = blocking
+        .map((c) => `"${c.name}" (${c._count.products} produit(s))`)
+        .join(', ');
       throw new ConflictException(
-        `Impossible de supprimer : cette catégorie contient ${category._count.products} produit(s).`,
+        `Impossible de supprimer : des articles actifs existent dans ${details}.`,
       );
     }
 
-    if (category._count.children > 0) {
-      throw new ConflictException(
-        `Impossible de supprimer : cette catégorie possède ${category._count.children} sous-catégorie(s).`,
-      );
-    }
+    const targetIdSet = new Set(targets.map((t) => t.id));
+    const allCategories = await this.prisma.category.findMany({
+      select: { id: true, parentId: true },
+    });
+    const parentById = new Map(allCategories.map((c) => [c.id, c.parentId]));
 
-    await this.prisma.category.delete({
-      where: { id },
+    const getDepth = (catId: string): number => {
+      let depth = 0;
+      let curr: string | null | undefined = catId;
+      const visited = new Set<string>();
+      while (curr && !visited.has(curr)) {
+        visited.add(curr);
+        const p = parentById.get(curr);
+        if (!p) break;
+        depth += 1;
+        curr = p;
+      }
+      return depth;
+    };
+
+    const getSurvivingAncestor = (catId: string): string | null => {
+      let curr = parentById.get(catId) ?? null;
+      const visited = new Set<string>([catId]);
+      while (curr && targetIdSet.has(curr) && !visited.has(curr)) {
+        visited.add(curr);
+        curr = parentById.get(curr) ?? null;
+      }
+      return curr && !targetIdSet.has(curr) ? curr : null;
+    };
+
+    // Delete deepest child/grandchild categories before parents
+    const orderedIds = Array.from(targetIdSet).sort((a, b) => getDepth(b) - getDepth(a));
+
+    await this.prisma.$transaction(async (tx) => {
+      const targetArray = Array.from(targetIdSet);
+
+      // Reassign soft-deleted archive products to a surviving category so FK deletion never fails
+      const softDeletedCount = await tx.product.count({
+        where: { categoryId: { in: targetArray }, deletedAt: { not: null } },
+      });
+      if (softDeletedCount > 0) {
+        const fallbackCategory = await tx.category.findFirst({
+          where: { id: { notIn: targetArray } },
+          select: { id: true },
+        });
+        if (!fallbackCategory) {
+          throw new ConflictException(
+            'Impossible de supprimer toutes les catégories tant que des produits archivés y sont rattachés.',
+          );
+        }
+        await tx.product.updateMany({
+          where: { categoryId: { in: targetArray }, deletedAt: { not: null } },
+          data: { categoryId: fallbackCategory.id },
+        });
+      }
+
+      for (const id of orderedIds) {
+        const survivingParent = getSurvivingAncestor(id);
+        await tx.category.updateMany({
+          where: { parentId: id },
+          data: { parentId: survivingParent },
+        });
+        await tx.category.delete({ where: { id } });
+      }
     });
 
     return {
       success: true,
-      message: 'Catégorie supprimée avec succès',
+      deletedCount: orderedIds.length,
+      message:
+        orderedIds.length === 1
+          ? 'Catégorie supprimée avec succès'
+          : `${orderedIds.length} catégories supprimées avec succès`,
     };
   }
 }

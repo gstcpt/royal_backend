@@ -98,6 +98,17 @@ export class CategoriesController {
     return this.categoriesService.update(id, updateCategoryDto);
   }
 
+  @Post('bulk-delete')
+  @ApiBearerAuth('JWT-auth')
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('categories.delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Suppression groupée de catégories (ordre hiérarchique enfants -> parents)' })
+  @ApiResponse({ status: 200, description: 'Catégories supprimées' })
+  async bulkDelete(@Body('ids') ids: string[]) {
+    return this.categoriesService.bulkDelete(Array.isArray(ids) ? ids : []);
+  }
+
   @Delete(':id')
   @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)

@@ -114,7 +114,7 @@ export class SuppliersService {
     const supplier = await this.prisma.supplier.findUnique({
       where: { id },
       include: {
-        _count: { select: { products: true } },
+        _count: { select: { products: { where: { deletedAt: null } } } },
       },
     });
 
@@ -127,6 +127,11 @@ export class SuppliersService {
         `Impossible de supprimer : ce fournisseur est rattaché à ${supplier._count.products} article(s).`,
       );
     }
+
+    await this.prisma.product.updateMany({
+      where: { supplierId: id, deletedAt: { not: null } },
+      data: { supplierId: null },
+    });
 
     await this.prisma.supplier.delete({
       where: { id },
