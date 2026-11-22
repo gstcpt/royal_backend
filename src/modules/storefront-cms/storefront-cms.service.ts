@@ -375,6 +375,7 @@ export class StorefrontCmsService {
             'cms.views',
             'cms.heroSlides',
             'cms.testimonials',
+            'sys.translations',
           ],
         },
       },
@@ -408,6 +409,7 @@ export class StorefrontCmsService {
     const rawHeroSlides = this.parseJsonSetting<any[]>(map.get('cms.heroSlides'), []);
     const heroSlides = this.sanitizeHeroSlides(rawHeroSlides, snap.heroSlides || []);
     const testimonials = this.parseJsonSetting<any[]>(map.get('cms.testimonials'), DEFAULT_TESTIMONIALS);
+    const translations = this.parseJsonSetting<any>(map.get('sys.translations'), null);
     const activeShowrooms = await this.prisma.pointOfSale.findMany({
       where: { isActive: true },
       orderBy: { createdAt: 'asc' },
@@ -441,6 +443,7 @@ export class StorefrontCmsService {
       heroSlides,
       defaults: snap,
       testimonials: Array.isArray(testimonials) ? testimonials.filter((t) => t.isActive !== false) : DEFAULT_TESTIMONIALS,
+      translations: translations && typeof translations === 'object' ? translations : null,
       contact: {
         companyName: identity.companyName || ROYAL_CONTACT_INFO.companyName,
         address: identity.address || ROYAL_CONTACT_INFO.address,
@@ -3938,17 +3941,15 @@ export class StorefrontCmsService {
         { key: '/dashboard/root/smtp', label: 'Paramètres SMTP', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/tva', label: 'Taxe et timbre fiscal', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/reference-prefixes', label: 'Préfixes et numérotations', section: 'Système & CMS', visibility: 'PRIVATE' },
-        { key: '/dashboard/root/print-templates', label: 'Documents et impressions', section: 'Système & CMS', visibility: 'PRIVATE' },
-        { key: '/dashboard/payment-methods', label: 'Modalités de paiement', section: 'Système & CMS', visibility: 'PRIVATE' },
+        { key: '/dashboard/root/print-templates', label: 'Documents & Imprimantes POS', section: 'Système & CMS', visibility: 'PRIVATE' },
+        { key: '/dashboard/payment-methods', label: 'Modalités & Passerelles Paiement', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/settings', label: 'Paramètres généraux', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/translations', label: 'Traductions i18n', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/roles-permissions', label: 'Rôles et permissions', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/logs', label: "Journal d'audit", section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/failures', label: 'Audit système', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/storage', label: 'Stockage Médias & CDN', section: 'Système & CMS', visibility: 'PRIVATE' },
-        { key: '/dashboard/root/payment-gateways', label: 'Passerelles Paiement (Flouci / ClicToPay)', section: 'Système & CMS', visibility: 'PRIVATE' },
-        { key: '/dashboard/root/printers', label: 'Imprimantes & Pont POS', section: 'Système & CMS', visibility: 'PRIVATE' },
-        { key: '/dashboard/root/ai', label: 'Intelligence Artificielle (Gemini / Groq)', section: 'Système & CMS', visibility: 'PRIVATE' },
+        { key: '/dashboard/root/ai', label: 'Intelligence Artificielle (IA)', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/visibility', label: 'Visibilité des vues', section: 'Système & CMS', visibility: 'PRIVATE' },
       ];
     }

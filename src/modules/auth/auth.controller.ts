@@ -25,6 +25,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ResendVerificationDto, VerifyEmailDto } from './dto/verify-email.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -77,20 +78,37 @@ export class AuthController {
   @Public()
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Inscription d’un nouveau client' })
-  @ApiResponse({ status: 201, description: 'Compte créé avec succès' })
+  @ApiOperation({ summary: 'Inscription client avec envoi obligatoire du code de vérification par email' })
+  @ApiResponse({ status: 201, description: 'Code de vérification envoyé par email' })
   @ApiResponse({ status: 409, description: 'Email déjà utilisé' })
   async register(
     @Body() registerDto: RegisterDto,
     @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
   ) {
     const metadata = {
       ipAddress: req.ip || (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
       userAgent: req.headers['user-agent'] || 'Unknown',
     };
 
-    const result = await this.authService.register(registerDto, metadata);
+    return this.authService.register(registerDto, metadata);
+  }
+
+  @Public()
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Vérification du code OTP email et activation session client' })
+  async verifyEmail(
+    @Body() dto: VerifyEmailDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const metadata = {
+      ipAddress: req.ip || (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
+      userAgent: req.headers['user-agent'] || 'Unknown',
+      deviceInfo: (req.headers['x-device-info'] as string) || null,
+    };
+
+    const result = await this.authService.verifyEmailCode(dto.email, dto.code, metadata);
 
     res.cookie('royal_access_token', result.accessToken, {
       httpOnly: true,
@@ -109,6 +127,14 @@ export class AuthController {
     });
 
     return result;
+  }
+
+  @Public()
+  @Post('resend-verification')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Renvoyer le code de vérification par email' })
+  async resendVerification(@Body() dto: ResendVerificationDto) {
+    return this.authService.resendVerificationCode(dto.email);
   }
 
   @Public()

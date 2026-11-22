@@ -4,6 +4,7 @@ import {
   ConflictException,
   ForbiddenException,
   NotFoundException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -15,6 +16,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SystemRole } from '@royal/shared-types';
+import { sendSmtpMailWithAttachments } from '../storefront-cms/utils/pdf-smtp.helper';
 
 @Injectable()
 export class AuthService {
@@ -147,7 +149,7 @@ export class AuthService {
       );
     }
 
-    // Verify Argon2 password hash
+    // Verify Argon2 password hash before leaking verification state
     const isPasswordValid = await argon2.verify(user.passwordHash, loginDto.password);
 
     if (!isPasswordValid) {
@@ -173,6 +175,12 @@ export class AuthService {
       }
 
       throw new UnauthorizedException('Identifiants de connexion incorrects');
+    }
+
+    if (!user.isEmailVerified) {
+      throw new ForbiddenException(
+        'EMAIL_NOT_VERIFIED: Votre adresse e-mail n’a pas encore été vérifiée. Consultez votre boîte de réception ou demandez un nouveau code.',
+      );
     }
 
     // Reset login attempts and record last login
@@ -260,85 +268,240 @@ export class AuthService {
     };
   }
 
+  private async sendVerificationEmail(email: string, firstName: string, code: string) {
+    try {
+      const smtpRow = await this.prisma.settings.findUnique({ where: { key: 'sys.smtp' } });
+      const smtpCfg: any = smtpRow?.value ? JSON.parse(smtpRow.value) : {};
+      if (!smtpCfg?.host || !smtpCfg?.user || !smtpCfg?.password) {
+        return {
+          sent: false,
+          reason: 'SMTP non configuré sur cet environnement. Contactez l’administrateur ou configurez /dashboard/root/smtp.',
+        };
+      }
+      await sendSmtpMailWithAttachments(smtpCfg, {
+        to: email,
+        subject: `Royal — Code de vérification de votre compte : ${code}`,
+        htmlBody: `
+          <div style="font-family:Poppins,Arial,sans-serif;max-width:560px;margin:auto;border:1px solid #E6E1D6;border-radius:16px;padding:28px;background:#FFFFFF;color:#1D232E;">
+            <div style="border-bottom:3px solid #C59B27;padding-bottom:12px;margin-bottom:20px;">
+              <h2 style="margin:0;color:#1D232E;font-size:20px;">Royal — Électro de Maison</h2>
+              <p style="margin:4px 0 0;color:#9A7414;font-size:12px;font-weight:700;">Vérification de votre adresse e-mail</p>
+            </div>
+            <p style="font-size:14px;">Bonjour <strong>${firstName}</strong>,</p>
+            <p style="font-size:13px;line-height:1.6;">Merci d'avoir créé un compte sur <strong>Royal</strong>. Pour activer votre espace client et empêcher les inscriptions frauduleuses, veuillez saisir le code de vérification ci-dessous (valable 15 minutes) :</p>
+            <div style="margin:22px 0;padding:16px;background:#FBF6E8;border:1px solid #E6D6A6;border-radius:12px;text-align:center;">
+              <span style="font-family:monospace;font-size:28px;font-weight:900;letter-spacing:8px;color:#9A7414;">${code}</span>
+            </div>
+            <p style="font-size:12px;color:#64748B;">Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail.</p>
+          </div>
+        `,
+      });
+      return { sent: true };
+    } catch (err: any) {
+      this.logger.warn(`Verification email error for ${email}: ${err?.message || err}`);
+      return {
+        sent: false,
+        reason: err?.message || 'Erreur lors de l’envoi de l’e-mail de vérification.',
+      };
+    }
+  }
+
   /**
-   * Register a new client user
+   * Register a new client user with mandatory email verification (no auto-login)
    */
   async register(registerDto: RegisterDto, metadata?: { ipAddress?: string; userAgent?: string }) {
-    const email = registerDto.email.toLowerCase();
+    const email = registerDto.email.trim().toLowerCase();
 
     const existingUser = await this.prisma.user.findUnique({
       where: { email },
     });
 
-    if (existingUser) {
-      throw new ConflictException('Un compte existe déjà avec cette adresse email');
+    if (existingUser && existingUser.isEmailVerified) {
+      throw new ConflictException('Un compte vérifié existe déjà avec cette adresse email');
     }
 
     const passwordHash = await argon2.hash(registerDto.password);
+    const otpCode = String(crypto.randomInt(100000, 999999));
+    const otpHash = this.hashToken(otpCode);
+    const otpExp = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Ensure CLIENT role exists
-    let clientRole = await this.prisma.role.findUnique({
-      where: { name: SystemRole.CLIENT },
-    });
-
-    if (!clientRole) {
-      clientRole = await this.prisma.role.create({
+    let createdCustomerId: string | null = null;
+    let linkedExistingCustomerId: string | null = null;
+    let targetUser = existingUser;
+    if (existingUser && !existingUser.isEmailVerified) {
+      // Allow unverified registrant to update details & receive a fresh code
+      targetUser = await this.prisma.user.update({
+        where: { id: existingUser.id },
         data: {
-          name: SystemRole.CLIENT,
-          displayName: 'Client',
-          isSystem: true,
-          description: 'Client final e-commerce',
+          passwordHash,
+          firstName: registerDto.firstName,
+          lastName: registerDto.lastName,
+          phone: registerDto.phone || existingUser.phone,
+          emailVerifyToken: otpHash,
+          emailVerifyExp: otpExp,
         },
       });
-    }
+    } else {
+      let clientRole = await this.prisma.role.findUnique({
+        where: { name: SystemRole.CLIENT },
+      });
 
-    const newUser = await this.prisma.user.create({
-      data: {
-        email,
-        passwordHash,
-        firstName: registerDto.firstName,
-        lastName: registerDto.lastName,
-        phone: registerDto.phone || null,
-        isActive: true,
-        isEmailVerified: false,
-        userRoles: {
-          create: {
-            roleId: clientRole.id,
-          },
-        },
-      },
-    });
-
-    // Link existing guest Customer profile or create a new Customer profile
-    const existingCustomer = await this.prisma.customer.findUnique({
-      where: { email },
-    });
-    if (existingCustomer) {
-      if (!existingCustomer.userId) {
-        await this.prisma.customer.update({
-          where: { id: existingCustomer.id },
+      if (!clientRole) {
+        clientRole = await this.prisma.role.create({
           data: {
-            userId: newUser.id,
-            firstName: registerDto.firstName,
-            lastName: registerDto.lastName,
-            phone: registerDto.phone || existingCustomer.phone,
+            name: SystemRole.CLIENT,
+            displayName: 'Client',
+            isSystem: true,
+            description: 'Client final e-commerce',
           },
         });
       }
-    } else {
-      await this.prisma.customer.create({
+
+      targetUser = await this.prisma.user.create({
         data: {
-          userId: newUser.id,
           email,
+          passwordHash,
           firstName: registerDto.firstName,
           lastName: registerDto.lastName,
           phone: registerDto.phone || null,
+          isActive: true,
+          isEmailVerified: false,
+          emailVerifyToken: otpHash,
+          emailVerifyExp: otpExp,
+          userRoles: {
+            create: {
+              roleId: clientRole.id,
+            },
+          },
         },
       });
+
+      const existingCustomer = await this.prisma.customer.findUnique({
+        where: { email },
+      });
+      if (existingCustomer) {
+        if (!existingCustomer.userId) {
+          linkedExistingCustomerId = existingCustomer.id;
+          await this.prisma.customer.update({
+            where: { id: existingCustomer.id },
+            data: {
+              userId: targetUser.id,
+              firstName: registerDto.firstName,
+              lastName: registerDto.lastName,
+              phone: registerDto.phone || existingCustomer.phone,
+            },
+          });
+        }
+      } else {
+        const createdCustomer = await this.prisma.customer.create({
+          data: {
+            userId: targetUser.id,
+            email,
+            firstName: registerDto.firstName,
+            lastName: registerDto.lastName,
+            phone: registerDto.phone || null,
+          },
+        });
+        createdCustomerId = createdCustomer.id;
+      }
     }
 
-    // Log the user in immediately
-    return this.login(newUser, metadata);
+    const delivery = await this.sendVerificationEmail(email, targetUser.firstName, otpCode);
+    if (!delivery.sent) {
+      if (!existingUser) {
+        if (createdCustomerId) {
+          await this.prisma.customer.delete({ where: { id: createdCustomerId } }).catch(() => {});
+        } else if (linkedExistingCustomerId) {
+          await this.prisma.customer.update({
+            where: { id: linkedExistingCustomerId },
+            data: { userId: null },
+          }).catch(() => {});
+        }
+        await this.prisma.userRole.deleteMany({ where: { userId: targetUser.id } }).catch(() => {});
+        await this.prisma.user.delete({ where: { id: targetUser.id } }).catch(() => {});
+      }
+      throw new BadRequestException(
+        `Impossible d'envoyer l'e-mail de vérification à ${email}. Vérifiez que votre adresse existe ou vérifiez la configuration SMTP (${delivery.reason}).`,
+      );
+    }
+
+    return {
+      requiresEmailVerification: true,
+      email,
+      expiresInMinutes: 15,
+      emailSent: true,
+      message: `Un code de vérification à 6 chiffres a été envoyé à ${email}. Confirmez votre adresse avant de vous connecter.`,
+    };
+  }
+
+  async verifyEmailCode(
+    emailRaw: string,
+    codeRaw: string,
+    metadata?: { deviceInfo?: string; ipAddress?: string; userAgent?: string },
+  ) {
+    const email = String(emailRaw || '').trim().toLowerCase();
+    const code = String(codeRaw || '').trim();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user || user.deletedAt) {
+      throw new NotFoundException('Aucun compte trouvé pour cette adresse e-mail.');
+    }
+    if (user.isEmailVerified) {
+      return this.login(user, metadata);
+    }
+    if (!user.emailVerifyToken || !user.emailVerifyExp || user.emailVerifyExp < new Date()) {
+      throw new BadRequestException('Ce code de vérification a expiré. Demandez un nouveau code.');
+    }
+    if (this.hashToken(code) !== user.emailVerifyToken) {
+      throw new BadRequestException('Code de vérification invalide.');
+    }
+
+    const verifiedUser = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        isEmailVerified: true,
+        emailVerifyToken: null,
+        emailVerifyExp: null,
+      },
+    });
+
+    return this.login(verifiedUser, metadata);
+  }
+
+  async resendVerificationCode(emailRaw: string) {
+    const email = String(emailRaw || '').trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user || user.deletedAt) {
+      throw new NotFoundException('Aucun compte trouvé pour cette adresse e-mail.');
+    }
+    if (user.isEmailVerified) {
+      return {
+        alreadyVerified: true,
+        message: 'Cette adresse e-mail est déjà vérifiée. Vous pouvez vous connecter.',
+      };
+    }
+
+    const otpCode = String(crypto.randomInt(100000, 999999));
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        emailVerifyToken: this.hashToken(otpCode),
+        emailVerifyExp: new Date(Date.now() + 15 * 60 * 1000),
+      },
+    });
+
+    const delivery = await this.sendVerificationEmail(email, user.firstName, otpCode);
+    if (!delivery.sent) {
+      throw new BadRequestException(
+        `Échec d'envoi du code vers ${email} (${delivery.reason}).`,
+      );
+    }
+
+    return {
+      sent: true,
+      email,
+      expiresInMinutes: 15,
+      message: `Un nouveau code de vérification à 6 chiffres vient d'être envoyé à ${email}.`,
+    };
   }
 
   /**

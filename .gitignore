@@ -14,8 +14,8 @@ node_modules/
 .env.*.local
 
 # Uploads & Logs
-uploads/
-logs/
+/uploads/
+/logs/
 *.log
 
 # OS & IDE
