@@ -363,3 +363,39 @@ export class SmtpTestDto {
   @ApiPropertyOptional() @IsOptional() @IsString() user?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() to?: string;
 }
+
+export class TestMediaStorageDto {
+  @ApiPropertyOptional() @IsOptional() @IsObject() config?: Record<string, any>;
+}
+
+export class FlouciInitDto {
+  @ApiProperty() @IsString() orderReference: string;
+  @ApiProperty() @Type(() => Number) @IsNumber() @Min(0.1) amountTnd: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() successUrl?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() failUrl?: string;
+}
+
+export class SendDeliveryDocumentsDto {
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() sendInvoice?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() sendDeliverySlip?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() customEmail?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() customNote?: string;
+}
+
+export class AiGenerateDto {
+  @ApiProperty({ enum: ['PRODUCT_COPY', 'ANALYTICS_INSIGHT', 'TEST'] })
+  @IsIn(['PRODUCT_COPY', 'ANALYTICS_INSIGHT', 'TEST'])
+  mode: 'PRODUCT_COPY' | 'ANALYTICS_INSIGHT' | 'TEST';
+
+  @ApiPropertyOptional() @IsOptional() @IsObject() payload?: Record<string, any>;
+  @ApiPropertyOptional() @IsOptional() @IsObject() overrideConfig?: Record<string, any>;
+}
+
+export class CarrierWebhookDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() trackingNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() orderReference?: string;
+  @ApiProperty() @IsString() status: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() secret?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() note?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() codCollected?: boolean;
+}

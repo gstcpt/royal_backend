@@ -1,8 +1,16 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
 import { PrismaService } from '../../database/prisma.service';
+import { storeMediaAsset } from './utils/media-storage.helper';
+import { buildDocumentPdfBuffer, sendSmtpMailWithAttachments } from './utils/pdf-smtp.helper';
+import { generateAiCompletion, extractJsonBlock } from './utils/ai-provider.helper';
 import {
   CreateContactDto,
   CreateProductReviewDto,
@@ -3570,27 +3578,9 @@ export class StorefrontCmsService {
     const mimeType = file.mimetype || (safeExt === '.svg' ? 'image/svg+xml' : `image/${safeExt.replace('.', '')}`);
     const filename = `royal-brand-${Date.now()}-${Math.floor(Math.random() * 1000)}${safeExt}`;
 
-    if (process.env.VERCEL) {
-      const dataUrl = `data:${mimeType};base64,${file.buffer.toString('base64')}`;
-      return {
-        filename,
-        size: file.buffer.length,
-        mimeType,
-        url: dataUrl,
-        relativePath: dataUrl,
-      };
-    }
-
-    const fullPath = path.join(this.getUploadDir(), filename);
-    fs.writeFileSync(fullPath, file.buffer);
-
-    return {
-      filename,
-      size: file.buffer.length,
-      mimeType,
-      url: `/api/v1/storefront-cms/media/${filename}`,
-      relativePath: `/api/v1/storefront-cms/media/${filename}`,
-    };
+    const storageRow = await this.prisma.settings.findUnique({ where: { key: 'sys.mediaStorage' } });
+    const storageCfg = this.parseJsonSetting<any>(storageRow?.value, this.getExtendedSysConfigDefault('mediaStorage'));
+    return storeMediaAsset(file.buffer, filename, mimeType, storageCfg, this.getUploadDir());
   }
 
   async readBrandingImage(filename: string) {
@@ -3955,6 +3945,10 @@ export class StorefrontCmsService {
         { key: '/dashboard/root/roles-permissions', label: 'Rôles et permissions', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/logs', label: "Journal d'audit", section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/failures', label: 'Audit système', section: 'Système & CMS', visibility: 'PRIVATE' },
+        { key: '/dashboard/root/storage', label: 'Stockage Médias & CDN', section: 'Système & CMS', visibility: 'PRIVATE' },
+        { key: '/dashboard/root/payment-gateways', label: 'Passerelles Paiement (Flouci / ClicToPay)', section: 'Système & CMS', visibility: 'PRIVATE' },
+        { key: '/dashboard/root/printers', label: 'Imprimantes & Pont POS', section: 'Système & CMS', visibility: 'PRIVATE' },
+        { key: '/dashboard/root/ai', label: 'Intelligence Artificielle (Gemini / Groq)', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/visibility', label: 'Visibilité des vues', section: 'Système & CMS', visibility: 'PRIVATE' },
       ];
     }
@@ -4481,6 +4475,138 @@ export class StorefrontCmsService {
     if (key === 'customersMeta') {
       return {};
     }
+    if (key === 'mediaStorage') {
+      return {
+        provider: 'AUTO_VPS_OR_VERCEL',
+        webpEnabled: true,
+        webpQuality: 0.85,
+        maxWidthPx: 1920,
+        r2AccountId: '',
+        r2AccessKeyId: '',
+        r2SecretAccessKey: '',
+        r2BucketName: 'royal-media',
+        r2PublicBaseUrl: '',
+        cloudinaryCloudName: '',
+        cloudinaryUploadPreset: '',
+        cloudinaryApiKey: '',
+        cloudinaryApiSecret: '',
+        localBasePath: '/api/v1/storefront-cms/media',
+      };
+    }
+    if (key === 'paymentGateways') {
+      return {
+        flouci: {
+          enabled: false,
+          isPubliclyVisible: false,
+          mode: 'SANDBOX',
+          appToken: '',
+          appSecret: '',
+          label: 'Paiement Mobile & Carte via Flouci (TND)',
+          description: 'Réglez instantanément par Wallet Flouci ou carte bancaire tunisienne.',
+          successUrl: '/order-confirmation',
+          failUrl: '/checkout?paymentError=flouci',
+        },
+        clictopay: {
+          enabled: false,
+          isPubliclyVisible: false,
+          mode: 'SANDBOX',
+          merchantId: '',
+          login: '',
+          password: '',
+          label: 'Carte Bancaire Tunisienne (ClicToPay SMT)',
+          description: 'Passerelle officielle monétique tunisienne 3DSecure.',
+        },
+        codEnabled: true,
+        bankTransferEnabled: false,
+        bankRib: '',
+      };
+    }
+    if (key === 'printers') {
+      return [
+        {
+          id: 'prt-pos-80',
+          name: 'Imprimante Thermique Comptoir (80mm)',
+          paperSize: '80mm',
+          connectionType: 'BROWSER_PRINT',
+          qzPrinterName: 'POS-80',
+          networkIp: '',
+          networkPort: 9100,
+          openCashDrawer: true,
+          autoPrintAfterSale: false,
+          alwaysPreviewBeforePrint: true,
+          showroomCode: 'SHOWROOM-MAHDIA',
+          isDefaultPos: true,
+          isActive: true,
+          headerNote: 'Merci pour votre confiance — Royal Electro de Maison',
+        },
+        {
+          id: 'prt-office-a4',
+          name: 'Imprimante Laser Bureau (A4)',
+          paperSize: 'A4',
+          connectionType: 'BROWSER_PRINT',
+          qzPrinterName: '',
+          networkIp: '',
+          networkPort: 9100,
+          openCashDrawer: false,
+          autoPrintAfterSale: false,
+          alwaysPreviewBeforePrint: true,
+          showroomCode: 'SIEGE',
+          isDefaultPos: false,
+          isActive: true,
+          headerNote: 'Facture & Bon de Livraison Officiel Royal',
+        },
+      ];
+    }
+    if (key === 'aiProvider') {
+      return {
+        enabled: false,
+        provider: 'GEMINI',
+        geminiApiKey: '',
+        geminiModel: 'gemini-2.5-flash',
+        groqApiKey: '',
+        groqModel: 'llama-3.3-70b-versatile',
+        enableCatalogCopy: true,
+        enableAnalyticsInsights: true,
+        defaultTone: 'Luxe éditorial sobre, précis et orienté conversion (Tunisie, TND)',
+      };
+    }
+    if (key === 'carrierWebhooks') {
+      return [
+        {
+          id: 'cw-aramex',
+          code: 'aramex',
+          name: 'Aramex Tunisie',
+          isActive: true,
+          webhookSecret: 'royal-aramex-wh-2026',
+          trackingBaseUrl: 'https://www.aramex.com/track/results?ShipmentNumber=',
+          apiUrl: '',
+          apiKey: '',
+        },
+        {
+          id: 'cw-first',
+          code: 'first-delivery',
+          name: 'First Delivery Group',
+          isActive: true,
+          webhookSecret: 'royal-first-wh-2026',
+          trackingBaseUrl: 'https://www.firstdeliverygroup.com/tracking?code=',
+          apiUrl: '',
+          apiKey: '',
+        },
+        {
+          id: 'cw-intigo',
+          code: 'intigo',
+          name: 'Intigo Delivery',
+          isActive: false,
+          webhookSecret: 'royal-intigo-wh-2026',
+          trackingBaseUrl: 'https://intigo.tn/track/',
+          apiUrl: '',
+          apiKey: '',
+        },
+      ];
+    }
+    if (key === 'carrierLogs') {
+      return [];
+    }
     return undefined;
   }
 
@@ -4660,6 +4786,12 @@ export class StorefrontCmsService {
       'translations',
       'customersMeta',
       'marketingPixels',
+      'mediaStorage',
+      'paymentGateways',
+      'printers',
+      'aiProvider',
+      'carrierWebhooks',
+      'carrierLogs',
     ];
     if (!allowed.includes(key)) {
       throw new BadRequestException('Clé de configuration invalide.');
@@ -4732,6 +4864,12 @@ export class StorefrontCmsService {
       'translations',
       'customersMeta',
       'marketingPixels',
+      'mediaStorage',
+      'paymentGateways',
+      'printers',
+      'aiProvider',
+      'carrierWebhooks',
+      'carrierLogs',
     ];
     if (!allowed.includes(key)) {
       throw new BadRequestException('Clé de configuration invalide.');
@@ -4910,6 +5048,460 @@ export class StorefrontCmsService {
       docReference: dto.docReference,
       updatedCount: updated.length,
       updated,
+    };
+  }
+
+  async testMediaStorage(overrideCfg?: Record<string, any>) {
+    const start = Date.now();
+    const saved = ((await this.getSysConfig('mediaStorage')).value || {}) as any;
+    const cfg = overrideCfg ? { ...saved, ...overrideCfg } : saved;
+    const tinyPngBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0uQAAAAASUVORK5CYII=';
+    const buffer = Buffer.from(tinyPngBase64, 'base64');
+    const filename = `royal-probe-${Date.now()}.png`;
+    const stored = await storeMediaAsset(buffer, filename, 'image/png', cfg, this.getUploadDir());
+    return {
+      ok: true,
+      providerUsed: stored.providerUsed,
+      url: stored.url,
+      durationMs: Date.now() - start,
+      message: `Test réussi via ${stored.providerUsed} (${Date.now() - start} ms).`,
+    };
+  }
+
+  async getPublicPaymentGateways() {
+    const cfg: any = (await this.getSysConfig('paymentGateways')).value || {};
+    return {
+      codEnabled: cfg.codEnabled !== false,
+      bankTransferEnabled: Boolean(cfg.bankTransferEnabled),
+      bankRib: cfg.bankTransferEnabled ? cfg.bankRib || '' : '',
+      flouci: {
+        enabled: Boolean(cfg.flouci?.enabled),
+        isPubliclyVisible: Boolean(cfg.flouci?.enabled && cfg.flouci?.isPubliclyVisible),
+        mode: cfg.flouci?.mode || 'SANDBOX',
+        label: cfg.flouci?.label || 'Paiement Mobile & Carte via Flouci (TND)',
+        description:
+          cfg.flouci?.description || 'Payez instantanément par Wallet Flouci ou carte bancaire tunisienne.',
+      },
+      clictopay: {
+        enabled: Boolean(cfg.clictopay?.enabled),
+        isPubliclyVisible: Boolean(cfg.clictopay?.enabled && cfg.clictopay?.isPubliclyVisible),
+        mode: cfg.clictopay?.mode || 'SANDBOX',
+        label: cfg.clictopay?.label || 'Carte Bancaire Tunisienne (ClicToPay SMT)',
+        description: cfg.clictopay?.description || 'Paiement sécurisé 3D-Secure Visa / Mastercard / e-Dinar.',
+      },
+    };
+  }
+
+  async initFlouciPayment(dto: {
+    orderReference: string;
+    amountTnd: number;
+    successUrl?: string;
+    failUrl?: string;
+  }) {
+    const cfg: any = (await this.getSysConfig('paymentGateways')).value || {};
+    const flouci = cfg.flouci || {};
+    if (!flouci.enabled) {
+      throw new BadRequestException('La passerelle Flouci est actuellement désactivée.');
+    }
+    const appToken = String(flouci.appToken || '').trim();
+    const appSecret = String(flouci.appSecret || '').trim();
+    if (!appToken || !appSecret) {
+      throw new BadRequestException('Identifiants Flouci (app_token / app_secret) manquants.');
+    }
+
+    const frontendOrigin = (process.env.FRONTEND_URL || 'https://royal.com.tn').replace(/\/+$/, '');
+    const successLink = dto.successUrl || `${frontendOrigin}/order-confirmation/${encodeURIComponent(dto.orderReference)}?paid=flouci`;
+    const failLink = dto.failUrl || `${frontendOrigin}/checkout?paymentError=flouci&ref=${encodeURIComponent(dto.orderReference)}`;
+
+    const res = await fetch('https://developers.flouci.com/api/generate_payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        app_token: appToken,
+        app_secret: appSecret,
+        amount: Math.max(100, Math.round(Number(dto.amountTnd || 0) * 1000)),
+        accept_card: 'true',
+        session_timeout_secs: 1200,
+        success_link: successLink,
+        fail_link: failLink,
+        developer_tracking_id: dto.orderReference,
+      }),
+    });
+
+    const json: any = await res.json().catch(() => ({}));
+    const link = json?.result?.link || json?.link;
+    if (!res.ok || !link) {
+      throw new BadRequestException(
+        json?.message || json?.result?.message || `Impossible d'initialiser le paiement Flouci (HTTP ${res.status}).`,
+      );
+    }
+
+    return {
+      paymentUrl: link,
+      paymentId: json?.result?.payment_id || null,
+      orderReference: dto.orderReference,
+    };
+  }
+
+  private normalizeCarrierStatus(raw: string): 'PREPARING' | 'IN_TRANSIT' | 'DELIVERED' | 'FAILED_RETURN' {
+    const upper = String(raw || '').trim().toUpperCase();
+    if (['DELIVERED', 'LIVRE', 'LIVREE', 'COMPLETED', 'SUCCESS'].includes(upper)) return 'DELIVERED';
+    if (['FAILED', 'RETURNED', 'FAILED_RETURN', 'ECHEC', 'RETOUR', 'CANCELLED'].includes(upper)) return 'FAILED_RETURN';
+    if (['IN_TRANSIT', 'SHIPPED', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'EN_TRANSIT', 'EN_COURS'].includes(upper)) {
+      return 'IN_TRANSIT';
+    }
+    return 'PREPARING';
+  }
+
+  async processCarrierWebhook(
+    carrierCode: string,
+    payload: {
+      trackingNumber?: string;
+      orderReference?: string;
+      status: string;
+      secret?: string;
+      note?: string;
+      codCollected?: boolean;
+    },
+    headerSecret?: string,
+    bypassSecretCheck = false,
+  ) {
+    const code = String(carrierCode || '').trim().toLowerCase();
+    const whRes = (await this.getSysConfig('carrierWebhooks')).value as any;
+    const webhooks: any[] = Array.isArray(whRes) ? whRes : [];
+    const carrierCfg = webhooks.find((w) => String(w.code || '').toLowerCase() === code);
+
+    if (!carrierCfg && !bypassSecretCheck) {
+      throw new NotFoundException(`Transporteur inconnu : ${carrierCode}`);
+    }
+    if (!bypassSecretCheck && carrierCfg?.webhookSecret) {
+      const provided = String(headerSecret || payload.secret || '').trim();
+      if (provided !== String(carrierCfg.webhookSecret).trim()) {
+        throw new ForbiddenException('Signature secret webhook invalide.');
+      }
+    }
+
+    const mappedDeliveryStatus = this.normalizeCarrierStatus(payload.status);
+    const slipsRes = (await this.getSysConfig('deliverySlips')).value as any;
+    const slips: any[] = Array.isArray(slipsRes) ? slipsRes : [];
+
+    const needleTracking = String(payload.trackingNumber || '').trim().toLowerCase();
+    const needleOrder = String(payload.orderReference || '').trim().replace(/^#/, '').toLowerCase();
+
+    let matchedSlip: any = null;
+    const updatedSlips = slips.map((slip) => {
+      const slipTrack = String(slip.trackingNumber || '').trim().toLowerCase();
+      const slipOrder = String(slip.orderReference || '').trim().replace(/^#/, '').toLowerCase();
+      const isMatch =
+        (needleTracking && slipTrack === needleTracking) ||
+        (needleOrder && slipOrder === needleOrder);
+      if (!isMatch || matchedSlip) return slip;
+      matchedSlip = {
+        ...slip,
+        status: mappedDeliveryStatus,
+        isCodCollected:
+          payload.codCollected !== undefined
+            ? Boolean(payload.codCollected)
+            : mappedDeliveryStatus === 'DELIVERED'
+            ? true
+            : slip.isCodCollected,
+        deliveredAt: mappedDeliveryStatus === 'DELIVERED' ? new Date().toISOString() : slip.deliveredAt,
+        carrierLastNote: payload.note || `Webhook ${carrierCfg?.name || code}: ${payload.status}`,
+      };
+      return matchedSlip;
+    });
+
+    if (matchedSlip) {
+      await this.updateSysConfig('deliverySlips', updatedSlips, `WEBHOOK:${code}`);
+    }
+
+    // Sync linked Prisma Order if found
+    let orderUpdated: string | null = null;
+    const orderRefLookup = (matchedSlip?.orderReference || payload.orderReference || '').replace(/^#/, '').trim();
+    if (orderRefLookup) {
+      const order = await this.prisma.order.findFirst({
+        where: { reference: { equals: orderRefLookup, mode: 'insensitive' } },
+      });
+      if (order && order.status !== 'CANCELLED') {
+        const orderTargetStatus =
+          mappedDeliveryStatus === 'DELIVERED'
+            ? 'DELIVERED'
+            : mappedDeliveryStatus === 'IN_TRANSIT'
+            ? 'OUT_FOR_DELIVERY'
+            : mappedDeliveryStatus === 'FAILED_RETURN'
+            ? 'FAILED'
+            : null;
+        if (orderTargetStatus && order.status !== orderTargetStatus) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.order.update({
+              where: { id: order.id },
+              data: {
+                status: orderTargetStatus as any,
+                ...(orderTargetStatus === 'DELIVERED' && !order.deliveredAt ? { deliveredAt: new Date() } : {}),
+              },
+            });
+            await tx.orderStatusHistory.create({
+              data: {
+                orderId: order.id,
+                fromStatus: order.status,
+                toStatus: orderTargetStatus as any,
+                changedBy: `Webhook ${carrierCfg?.name || code}`,
+                comment: payload.note || `Mise à jour automatique transporteur (${payload.status})`,
+              },
+            });
+          });
+          orderUpdated = order.reference;
+        }
+      }
+    }
+
+    const prevLogsRes = (await this.getSysConfig('carrierLogs')).value as any;
+    const prevLogs: any[] = Array.isArray(prevLogsRes) ? prevLogsRes : [];
+    const newLog = {
+      id: `clog-${Date.now()}`,
+      carrierCode: code,
+      carrierName: carrierCfg?.name || carrierCode,
+      trackingNumber: matchedSlip?.trackingNumber || payload.trackingNumber || '—',
+      orderReference: orderUpdated || matchedSlip?.orderReference || payload.orderReference || '—',
+      rawStatus: payload.status,
+      mappedStatus: mappedDeliveryStatus,
+      note: payload.note || (bypassSecretCheck ? 'Simulation Tableau de Bord' : 'Webhook Externe'),
+      matchedSlip: Boolean(matchedSlip),
+      orderSynced: Boolean(orderUpdated),
+      receivedAt: new Date().toISOString(),
+    };
+    await this.updateSysConfig('carrierLogs', [newLog, ...prevLogs].slice(0, 50), `WEBHOOK:${code}`);
+
+    return {
+      ok: true,
+      log: newLog,
+      updatedSlip: matchedSlip,
+      orderUpdated,
+    };
+  }
+
+  async sendOrderDeliveryDocuments(
+    orderId: string,
+    dto: {
+      sendInvoice?: boolean;
+      sendDeliverySlip?: boolean;
+      customEmail?: string;
+      customNote?: string;
+    },
+    actorEmail: string,
+  ) {
+    const order = await this.prisma.order.findFirst({
+      where: { OR: [{ id: orderId }, { reference: orderId }] },
+      include: {
+        items: true,
+        customer: true,
+        payments: { take: 1, orderBy: { createdAt: 'desc' } },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException('Commande introuvable.');
+    }
+
+    const sendInvoice = dto.sendInvoice !== false;
+    const sendDeliverySlip = dto.sendDeliverySlip !== false;
+    if (!sendInvoice && !sendDeliverySlip) {
+      throw new BadRequestException('Sélectionnez au moins un document (Facture ou Bon de Livraison).');
+    }
+
+    const recipientEmail = String(
+      dto.customEmail || order.customer?.email || order.guestEmail || '',
+    ).trim();
+    if (!recipientEmail) {
+      throw new BadRequestException('Aucune adresse email client renseignée pour cette commande.');
+    }
+
+    const [smtpRes, genRes, prefixesRes] = await Promise.all([
+      this.getSysConfig('smtp'),
+      this.getSysConfig('generalSettings'),
+      this.getSysConfig('prefixes'),
+    ]);
+    const smtpCfg: any = smtpRes?.value || {};
+    const genCfg: any = genRes?.value || {};
+    const prefixesList: any[] = Array.isArray(prefixesRes?.value) ? prefixesRes.value : [];
+
+    const facPrefix = prefixesList.find((p) => p.code === 'FACT')?.prefix || 'FAC-';
+    const blPrefix = prefixesList.find((p) => p.code === 'BL')?.prefix || 'BL-';
+    const cleanRefSuffix = String(order.reference || order.id).replace(/^#?CMD-?/i, '');
+    const invoiceRef = `${facPrefix}${cleanRefSuffix}`;
+    const deliveryRef = `${blPrefix}${cleanRefSuffix}`;
+
+    const shippingAddr: any =
+      order.shippingAddressJson && typeof order.shippingAddressJson === 'object'
+        ? order.shippingAddressJson
+        : {};
+    const customerName = order.customer
+      ? `${order.customer.firstName} ${order.customer.lastName}`.trim()
+      : order.guestName || 'Client Royal';
+
+    const pdfItems = (order.items || []).map((it: any) => ({
+      label: it.productName || 'Article',
+      sku: it.sku || '',
+      quantity: Number(it.quantity || 1),
+      unitPrice: Number(it.unitPrice || 0),
+      totalPrice: Number(it.totalPrice || 0),
+    }));
+
+    const commonOpts = {
+      orderReference: order.reference,
+      issueDate: new Date().toLocaleDateString('fr-TN'),
+      companyName: genCfg.companyName || ROYAL_CONTACT_INFO.companyName,
+      companyAddress: genCfg.address || ROYAL_CONTACT_INFO.address,
+      companyTaxId: genCfg.taxId || '',
+      customerName,
+      customerPhone: order.customer?.phone || order.guestPhone || shippingAddr.phone || '',
+      customerEmail: recipientEmail,
+      shippingAddress: [shippingAddr.street, shippingAddr.street2].filter(Boolean).join(', '),
+      city: [shippingAddr.city, shippingAddr.state].filter(Boolean).join(' - '),
+      paymentMethod: String(order.payments?.[0]?.method || ''),
+      items: pdfItems,
+      subtotalTnd: Number(order.subtotalAmount || 0),
+      shippingTnd: Number(order.shippingAmount || 0),
+      discountTnd: Number(order.discountAmount || 0),
+      taxTnd: Number(order.taxAmount || 0),
+      fiscalStampTnd: Number(genCfg.fiscalStamp ?? 1),
+      totalTnd: Number(order.totalAmount || 0),
+    };
+
+    const attachments: Array<{ filename: string; contentType: string; content: Buffer }> = [];
+    const docLabels: string[] = [];
+
+    if (sendInvoice) {
+      attachments.push({
+        filename: `${invoiceRef}.pdf`,
+        contentType: 'application/pdf',
+        content: buildDocumentPdfBuffer({
+          ...commonOpts,
+          docTitle: 'FACTURE CLIENT',
+          reference: invoiceRef,
+          isDeliverySlip: false,
+        }),
+      });
+      docLabels.push(`Facture (${invoiceRef})`);
+    }
+    if (sendDeliverySlip) {
+      attachments.push({
+        filename: `${deliveryRef}.pdf`,
+        contentType: 'application/pdf',
+        content: buildDocumentPdfBuffer({
+          ...commonOpts,
+          docTitle: 'BON DE LIVRAISON (BL)',
+          reference: deliveryRef,
+          isDeliverySlip: true,
+        }),
+      });
+      docLabels.push(`Bon de Livraison (${deliveryRef})`);
+    }
+
+    const htmlBody = `
+      <div style="font-family:Poppins,Arial,sans-serif;max-width:620px;margin:auto;border:1px solid #E6E1D6;border-radius:16px;padding:28px;background:#FFFFFF;color:#1D232E;">
+        <div style="border-bottom:3px solid #C59B27;padding-bottom:14px;margin-bottom:20px;">
+          <h2 style="margin:0;color:#1D232E;font-size:20px;">${commonOpts.companyName}</h2>
+          <p style="margin:4px 0 0;color:#9A7414;font-size:12px;font-weight:700;">Confirmation de livraison — Commande #${order.reference}</p>
+        </div>
+        <p style="font-size:14px;line-height:1.6;">Bonjour <strong>${customerName}</strong>,</p>
+        <p style="font-size:14px;line-height:1.6;">Votre commande <strong>#${order.reference}</strong> d'un montant total de <strong>${commonOpts.totalTnd.toFixed(3)} TND</strong> a bien été marquée comme <strong>livrée</strong>.</p>
+        <p style="font-size:13px;line-height:1.6;">Vous trouverez en pièces jointes les documents PDF correspondants : <strong>${docLabels.join(' et ')}</strong>.</p>
+        ${dto.customNote ? `<div style="background:#FBF9F4;border-left:3px solid #C59B27;padding:12px;margin:16px 0;font-size:13px;">${dto.customNote}</div>` : ''}
+        <p style="font-size:12px;color:#64748B;margin-top:24px;">Merci pour votre confiance — Service Client Royal (${ROYAL_CONTACT_INFO.phone}).</p>
+      </div>
+    `;
+
+    const mailRes = await sendSmtpMailWithAttachments(smtpCfg, {
+      to: recipientEmail,
+      subject: `Royal — Documents commande #${order.reference} (${docLabels.join(' + ')})`,
+      htmlBody,
+      attachments,
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        actorEmail,
+        action: 'SEND_DELIVERY_DOCUMENTS',
+        resourceType: 'ORDER',
+        resourceId: order.id,
+        tableName: 'Order',
+        description: `Envoi manuel (${docLabels.join(', ')}) à ${recipientEmail}`,
+      },
+    });
+
+    return {
+      ok: mailRes.accepted,
+      to: recipientEmail,
+      attachedDocuments: docLabels,
+      message: mailRes.message,
+    };
+  }
+
+  async generateAiContent(
+    dto: {
+      mode: 'PRODUCT_COPY' | 'ANALYTICS_INSIGHT' | 'TEST';
+      payload?: Record<string, any>;
+      overrideConfig?: Record<string, any>;
+    },
+    allowOverride = false,
+  ) {
+    const saved = ((await this.getSysConfig('aiProvider')).value || {}) as any;
+    const cfg = allowOverride && dto.overrideConfig ? { ...saved, ...dto.overrideConfig } : saved;
+
+    if (dto.mode !== 'TEST' && !cfg.enabled) {
+      throw new BadRequestException(
+        'Le module IA est désactivé. Demandez au compte ROOT de l’activer dans Système > Intelligence Artificielle.',
+      );
+    }
+
+    if (dto.mode === 'TEST') {
+      const res = await generateAiCompletion(
+        cfg,
+        'Tu es l’assistant technique de Royal Électro de Maison en Tunisie. Réponds en une phrase courte en français.',
+        'Confirme que la connexion IA fonctionne correctement pour Royal.',
+      );
+      return {
+        ok: true,
+        provider: res.provider,
+        model: res.model,
+        reply: res.text,
+      };
+    }
+
+    if (dto.mode === 'PRODUCT_COPY') {
+      const p = dto.payload || {};
+      const systemPrompt = `Tu es un rédacteur e-commerce expert pour Royal Électro de Maison (Tunisie, devise TND). Ton: ${cfg.defaultTone || 'Luxe éditorial sobre, précis'}. Retourne UNIQUEMENT un objet JSON valide (sans markdown) avec exactement ces clés: {"nameAr": string, "shortDescription": string, "description": string, "metaTitle": string, "metaDesc": string, "focusKeyword": string}.`;
+      const userPrompt = `Produit: "${p.name || 'Appareil'}", Catégorie: "${p.category || 'Électroménager'}", Marque: "${p.brand || 'Royal'}", Prix: "${p.price || ''} TND". Contraintes: metaTitle <= 60 caractères, metaDesc 135-160 caractères, description riche (80-130 mots) en français, et nom commercial naturel en arabe dans nameAr.`;
+      const res = await generateAiCompletion(cfg, systemPrompt, userPrompt);
+      const parsed = extractJsonBlock(res.text);
+      if (!parsed) {
+        return {
+          ok: true,
+          provider: res.provider,
+          model: res.model,
+          data: { description: res.text },
+        };
+      }
+      return {
+        ok: true,
+        provider: res.provider,
+        model: res.model,
+        data: parsed,
+      };
+    }
+
+    // ANALYTICS_INSIGHT
+    const a = dto.payload || {};
+    const systemPrompt = `Tu es un directeur retail & e-commerce pour Royal Électro de Maison (Tunisie). Analyse les métriques et réponds UNIQUEMENT en JSON valide: {"headline": string, "summary": string, "recommendations": [{"title": string, "impact": "HAUT"|"MOYEN", "action": string}]}. Max 4 recommandations concrètes en français.`;
+    const userPrompt = `KPIs actuels: Vues=${a.totalViews || 0}, Visiteurs=${a.totalVisitors || 0}, Taux rebond=${a.avgBounce || 0}%, Taux conversion=${a.avgConversion || 0}%, Top pages=${JSON.stringify(a.topPages || [])}.`;
+    const res = await generateAiCompletion(cfg, systemPrompt, userPrompt);
+    const parsed = extractJsonBlock(res.text) || { headline: 'Analyse IA', summary: res.text, recommendations: [] };
+    return {
+      ok: true,
+      provider: res.provider,
+      model: res.model,
+      data: parsed,
     };
   }
 }

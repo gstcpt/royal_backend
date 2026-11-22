@@ -20,15 +20,20 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { StorefrontCmsService } from './storefront-cms.service';
 import {
+  AiGenerateDto,
   ApplyStockLifecycleDto,
+  CarrierWebhookDto,
   CreateContactDto,
   CreateProductReviewDto,
   CreateSupportMessageDto,
+  FlouciInitDto,
   ModerateReviewDto,
   ReorderFaqDto,
   ReplySupportThreadDto,
+  SendDeliveryDocumentsDto,
   SmtpTestDto,
   SubscribeNewsletterDto,
+  TestMediaStorageDto,
   ToggleReactionDto,
   ToggleWishlistDto,
   UpdateCmsIdentityDto,
@@ -643,11 +648,22 @@ export class StorefrontCmsController {
     res.send(buffer);
   }
 
+  private isRootRequest(req: any): boolean {
+    const userRoles: string[] = Array.isArray(req.user?.roles)
+      ? req.user.roles.map((r: any) => (typeof r === 'string' ? r : r?.role || r?.name)).filter(Boolean)
+      : [req.user?.role].filter(Boolean);
+    return userRoles.includes('ROOT');
+  }
+
   @Get('sys-config/:key')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
   @Permissions('settings:read')
-  getSysConfig(@Param('key') key: string) {
+  getSysConfig(@Param('key') key: string, @Req() req: any) {
+    const rootReadKeys = ['mediaStorage', 'paymentGateways', 'aiProvider'];
+    if (rootReadKeys.includes(key) && !this.isRootRequest(req)) {
+      throw new ForbiddenException('Seul le compte ROOT peut consulter cette configuration sensible.');
+    }
     return this.service.getSysConfig(key);
   }
 
@@ -656,13 +672,9 @@ export class StorefrontCmsController {
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
   @Permissions('settings:update')
   updateSysConfig(@Param('key') key: string, @Body() dto: UpdateSysConfigDto, @Req() req: any) {
-    if (key === 'visibility') {
-      const userRoles: string[] = Array.isArray(req.user?.roles)
-        ? req.user.roles.map((r: any) => (typeof r === 'string' ? r : r?.role || r?.name)).filter(Boolean)
-        : [req.user?.role].filter(Boolean);
-      if (!userRoles.includes('ROOT')) {
-        throw new ForbiddenException('Seul le compte ROOT peut modifier la visibilité des vues.');
-      }
+    const rootWriteKeys = ['visibility', 'mediaStorage', 'paymentGateways', 'printers', 'aiProvider'];
+    if (rootWriteKeys.includes(key) && !this.isRootRequest(req)) {
+      throw new ForbiddenException('Seul le compte ROOT peut modifier cette configuration système.');
     }
     return this.service.updateSysConfig(key, dto.value, req.user?.email);
   }
@@ -673,6 +685,90 @@ export class StorefrontCmsController {
   @Permissions('settings:update')
   testSmtp(@Body() dto: SmtpTestDto) {
     return this.service.testSmtpConnection(dto);
+  }
+
+  @Post('media/test-storage')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:update')
+  testMediaStorage(@Body() dto: TestMediaStorageDto, @Req() req: any) {
+    if (!this.isRootRequest(req)) {
+      throw new ForbiddenException('Seul le compte ROOT peut tester le stockage médias.');
+    }
+    return this.service.testMediaStorage(dto?.config);
+  }
+
+  @Public()
+  @Get('public-payment-gateways')
+  @ApiOperation({ summary: 'Passerelles de paiement publiques visibles sur le checkout' })
+  getPublicPaymentGateways() {
+    return this.service.getPublicPaymentGateways();
+  }
+
+  @Public()
+  @Post('payments/flouci/init')
+  @ApiOperation({ summary: 'Initialiser un paiement Flouci TND pour une commande' })
+  initFlouciPayment(@Body() dto: FlouciInitDto) {
+    return this.service.initFlouciPayment(dto);
+  }
+
+  @Public()
+  @Post('webhooks/carrier/:carrierCode')
+  @ApiOperation({ summary: 'Webhook transporteur tunisien (Aramex, First Delivery, Intigo)' })
+  receiveCarrierWebhook(
+    @Param('carrierCode') carrierCode: string,
+    @Body() dto: CarrierWebhookDto,
+    @Req() req: any,
+  ) {
+    const headerSecret = req.headers?.['x-webhook-secret'] || req.headers?.['x-api-key'];
+    return this.service.processCarrierWebhook(carrierCode, dto, String(headerSecret || ''), false);
+  }
+
+  @Post('webhooks/carrier-test/:carrierCode')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('orders:update')
+  testCarrierWebhook(@Param('carrierCode') carrierCode: string, @Body() dto: CarrierWebhookDto) {
+    return this.service.processCarrierWebhook(carrierCode, dto, undefined, true);
+  }
+
+  @Post('orders/:id/send-delivery-documents')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('orders:update')
+  sendOrderDeliveryDocuments(
+    @Param('id') id: string,
+    @Body() dto: SendDeliveryDocumentsDto,
+    @Req() req: any,
+  ) {
+    return this.service.sendOrderDeliveryDocuments(id, dto, req.user?.email || 'STAFF');
+  }
+
+  @Post('ai/generate')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('products:update')
+  generateAiContent(@Body() dto: AiGenerateDto) {
+    return this.service.generateAiContent(dto, false);
+  }
+
+  @Post('ai/test')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:update')
+  testAiConnection(@Body() dto: AiGenerateDto, @Req() req: any) {
+    if (!this.isRootRequest(req)) {
+      throw new ForbiddenException('Seul le compte ROOT peut tester le fournisseur IA.');
+    }
+    return this.service.generateAiContent({ ...dto, mode: 'TEST' }, true);
+  }
+
+  @Get('pos-printers')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  async getPosPrinters() {
+    const res = await this.service.getSysConfig('printers');
+    return Array.isArray(res?.value) ? res.value : [];
   }
 
   @Public()
