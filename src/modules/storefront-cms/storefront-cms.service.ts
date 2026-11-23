@@ -4907,7 +4907,161 @@ export class StorefrontCmsService {
     if (key === 'carrierLogs') {
       return [];
     }
+    if (key === 'roleViews') {
+      return this.getDefaultRoleViewsConfig();
+    }
     return undefined;
+  }
+
+  private getDefaultRoleViewsConfig(): Record<string, string[]> {
+    const catalogue = [
+      '/dashboard/brands',
+      '/dashboard/categories',
+      '/dashboard/characteristics',
+      '/dashboard/variants',
+      '/dashboard/articles',
+      '/dashboard/coupons',
+    ];
+    const communityAll = [
+      '/dashboard/community/notifications',
+      '/dashboard/community/messages',
+      '/dashboard/community/contacts',
+    ];
+    const clientSpace = [
+      '/account/home',
+      '/account/orders',
+      '/account/favorites',
+      '/account/profile',
+      '/account/loyalty',
+      '/account/coupons',
+    ];
+    const treasury = [
+      '/dashboard/treasury',
+      '/dashboard/treasury/transactions',
+      '/dashboard/treasury/payments',
+      '/dashboard/accounting',
+    ];
+    const purchases = [
+      '/dashboard/purchases/prospects',
+      '/dashboard/suppliers',
+      '/dashboard/purchases/orders',
+      '/dashboard/purchases/receipts',
+    ];
+    const stock = [
+      '/dashboard/warehouses',
+      '/dashboard/stock-in',
+      '/dashboard/stock-out',
+      '/dashboard/inventory',
+      '/dashboard/inventory-documents',
+      '/dashboard/transfers',
+    ];
+    const sales = [
+      '/dashboard/customers',
+      '/dashboard/orders',
+      '/dashboard/deliveries',
+      '/dashboard/returns',
+      '/dashboard/invoices',
+    ];
+    const pos = ['/dashboard/pos/showrooms', '/dashboard/pos'];
+    const seo = [
+      '/dashboard/community/testimonials',
+      '/dashboard/reports/interactions',
+      '/dashboard/community/newsletters',
+      '/dashboard/seo/testimonials',
+      '/dashboard/seo/pixels',
+    ];
+    const reports = ['/dashboard/analytics', '/dashboard/reports/sales', '/dashboard/reports/treasury'];
+    const staffUsersAll = [
+      '/dashboard/users',
+      '/dashboard/users/admins',
+      '/dashboard/users/website-managers',
+      '/dashboard/users/magasiniers',
+      '/dashboard/users/caissiers',
+      '/dashboard/users/vendeurs',
+      '/dashboard/users/financiers',
+      '/dashboard/users/commercials',
+      '/dashboard/users/marketing',
+      '/dashboard/users/delivery-managers',
+      '/dashboard/users/delivery-agents',
+      '/dashboard/users/clients',
+    ];
+    const systemShared = [
+      '/dashboard/root/storefront/info',
+      '/dashboard/root/storefront/layouts',
+      '/dashboard/root/storefront/views',
+      '/dashboard/root/email-templates',
+      '/dashboard/root/smtp',
+      '/dashboard/root/tva',
+      '/dashboard/root/reference-prefixes',
+      '/dashboard/root/print-templates',
+      '/dashboard/payment-methods',
+      '/dashboard/settings',
+      '/dashboard/translations',
+      '/dashboard/root/roles-permissions',
+      '/dashboard/logs',
+      '/dashboard/root/failures',
+    ];
+
+    return {
+      SUPER_ADMIN: [
+        '/dashboard',
+        ...communityAll,
+        '/dashboard/root/superadmins',
+        ...staffUsersAll,
+        ...catalogue,
+        ...treasury,
+        ...purchases,
+        ...stock,
+        ...sales,
+        ...pos,
+        ...seo,
+        ...reports,
+        ...clientSpace,
+        ...systemShared,
+      ],
+      WEBSITE_MANAGER: [
+        '/dashboard',
+        ...communityAll,
+        ...staffUsersAll.filter((u) => u !== '/dashboard/users/admins'),
+        ...catalogue,
+        ...treasury,
+        ...purchases,
+        ...stock,
+        ...sales,
+        ...seo,
+        ...reports,
+        ...clientSpace,
+      ],
+      ADMIN: [
+        '/dashboard',
+        ...communityAll,
+        ...staffUsersAll.filter((u) => u !== '/dashboard/users/admins'),
+        ...catalogue,
+        ...treasury,
+        ...purchases,
+        ...stock,
+        ...sales,
+        ...seo,
+        ...reports,
+        ...clientSpace,
+      ],
+      MARKETING: [
+        '/dashboard',
+        '/dashboard/community/notifications',
+        '/dashboard/community/contacts',
+        ...catalogue,
+        ...clientSpace,
+        '/account/notifications',
+      ],
+      STOCK_MANAGER: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', ...stock, '/dashboard/orders', '/dashboard/deliveries', '/dashboard/returns', ...clientSpace],
+      CASHIER: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', ...treasury, ...sales, ...pos, ...clientSpace],
+      SALESPERSON: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', ...sales, ...pos, ...clientSpace],
+      ACCOUNTANT: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', ...treasury, ...purchases, ...sales, ...reports, ...clientSpace],
+      COMMERCIAL: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', ...catalogue, '/dashboard/purchases/prospects', ...sales, ...clientSpace],
+      DELIVERY_MANAGER: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', '/dashboard/deliveries', '/dashboard/orders', '/dashboard/pos/showrooms', ...clientSpace],
+      DELIVERY_AGENT: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', '/dashboard/deliveries', '/dashboard/orders', ...clientSpace],
+      CLIENT: ['/dashboard', '/account/notifications', '/account/messages', ...clientSpace],
+    };
   }
 
   async getCustomersList(limit = 0, search?: string, page = 1) {
@@ -5097,6 +5251,7 @@ export class StorefrontCmsService {
       'prefixes',
       'printTemplates',
       'visibility',
+      'roleViews',
       'purchaseOrders',
       'purchaseReceipts',
       'treasuryTransactions',
@@ -5125,7 +5280,7 @@ export class StorefrontCmsService {
     if (!allowed.includes(key)) {
       throw new BadRequestException('Clé de configuration invalide.');
     }
-    const cacheableKeys = new Set(['visibility', 'translations', 'marketingPixels']);
+    const cacheableKeys = new Set(['visibility', 'roleViews', 'translations', 'marketingPixels']);
     if (cacheableKeys.has(key)) {
       const cached = this.sysConfigCache.get(key);
       if (cached && Date.now() < cached.expiresAt) {
@@ -5167,6 +5322,22 @@ export class StorefrontCmsService {
         }),
         updatedAt: row?.updatedAt || null,
       };
+    } else if (key === 'roleViews' && fallback && typeof fallback === 'object') {
+      const merged: Record<string, string[]> = { ...(fallback as Record<string, string[]>) };
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        Object.entries(parsed).forEach(([roleKey, routes]) => {
+          if (Array.isArray(routes)) {
+            merged[roleKey.toUpperCase()] = Array.from(
+              new Set(routes.filter((r): r is string => typeof r === 'string' && r.trim().length > 0)),
+            );
+          }
+        });
+      }
+      result = {
+        key,
+        value: merged,
+        updatedAt: row?.updatedAt || null,
+      };
     } else {
       result = {
         key,
@@ -5187,6 +5358,7 @@ export class StorefrontCmsService {
       'prefixes',
       'printTemplates',
       'visibility',
+      'roleViews',
       'purchaseOrders',
       'purchaseReceipts',
       'treasuryTransactions',
@@ -5226,6 +5398,15 @@ export class StorefrontCmsService {
                 ? 'PRIVATE'
                 : 'PUBLIC',
           }))
+        : key === 'roleViews' && value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.entries(value).reduce<Record<string, string[]>>((acc, [roleKey, routes]) => {
+            if (Array.isArray(routes)) {
+              acc[roleKey.toUpperCase()] = Array.from(
+                new Set(routes.filter((r): r is string => typeof r === 'string' && r.trim().length > 0)),
+              );
+            }
+            return acc;
+          }, {})
         : value;
     await this.upsertSetting(`sys.${key}`, JSON.stringify(normalizedValue), 'system', updatedBy);
     return this.getSysConfig(key);

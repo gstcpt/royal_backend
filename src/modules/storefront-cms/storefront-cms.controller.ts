@@ -143,7 +143,7 @@ export class StorefrontCmsController {
   @Get('contacts')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('contacts:read|users:read')
   @ApiOperation({ summary: 'Lister les messages de contact (Dashboard)' })
   listContacts(@Query('limit') limit?: string) {
     const parsedLimit = limit !== undefined ? Number(limit) : undefined;
@@ -155,7 +155,7 @@ export class StorefrontCmsController {
   @Patch('contacts/read-all')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('contacts:update|users:read')
   @ApiOperation({ summary: 'Marquer tous les messages de contact comme lus' })
   markAllContactsRead() {
     return this.service.markAllContactsRead();
@@ -164,7 +164,7 @@ export class StorefrontCmsController {
   @Patch('contacts/:id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('contacts:update|users:read')
   updateContact(@Param('id') id: string, @Body() dto: UpdateContactDto) {
     return this.service.updateContact(id, dto);
   }
@@ -172,7 +172,7 @@ export class StorefrontCmsController {
   @Delete('contacts/:id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('contacts:delete|users:read')
   deleteContact(@Param('id') id: string) {
     return this.service.deleteContact(id);
   }
@@ -180,7 +180,7 @@ export class StorefrontCmsController {
   @Post('contacts/bulk-action')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('contacts:update|users:read')
   @ApiOperation({ summary: 'Action groupée sur les messages de contact (lu, non lu, corbeille, suppression)' })
   bulkActionContacts(
     @Body() body: { ids: string[]; action: 'MARK_READ' | 'MARK_UNREAD' | 'TRASH' | 'RESTORE' | 'DELETE' },
@@ -235,7 +235,7 @@ export class StorefrontCmsController {
   @Get('newsletters')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('newsletters:read|users:read')
   @ApiOperation({ summary: 'Lister les abonnés newsletter depuis PostgreSQL' })
   listNewsletterSubscribers() {
     return this.service.listNewsletterSubscribers();
@@ -244,7 +244,7 @@ export class StorefrontCmsController {
   @Patch('newsletters/:id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('newsletters:update|users:read')
   @ApiOperation({ summary: 'Activer / désactiver un abonné newsletter' })
   toggleNewsletterSubscriber(@Param('id') id: string) {
     return this.service.toggleNewsletterSubscriber(id);
@@ -253,7 +253,7 @@ export class StorefrontCmsController {
   @Delete('newsletters/:id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('newsletters:delete|users:read')
   @ApiOperation({ summary: 'Supprimer un abonné newsletter' })
   deleteNewsletterSubscriber(@Param('id') id: string) {
     return this.service.deleteNewsletterSubscriber(id);
@@ -262,7 +262,7 @@ export class StorefrontCmsController {
   @Get('sales-report')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('reports_sales:read|users:read')
   @ApiOperation({ summary: 'Rapport financier des ventes et marges depuis PostgreSQL' })
   getSalesReport() {
     return this.service.getSalesReport();
@@ -271,7 +271,7 @@ export class StorefrontCmsController {
   @Get('analytics-report')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('reports:read|users:read')
   @ApiOperation({ summary: 'Rapport d’audience et de consultation Storefront depuis PostgreSQL' })
   getAnalyticsReport() {
     return this.service.getAnalyticsReport();
@@ -280,7 +280,7 @@ export class StorefrontCmsController {
   @Get('interactions-report')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('interactions:read|users:read')
   @ApiOperation({ summary: 'Télémétrie complète des interactions clients (likes, dislikes, favoris, avis, vues)' })
   getInteractionsReport() {
     return this.service.getInteractionsReport();
@@ -289,7 +289,7 @@ export class StorefrontCmsController {
   @Get('admin/reviews')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('reviews:read|users:read')
   @ApiOperation({ summary: 'Lister tous les avis & commentaires pour modération (ROOT/Super Admin/Website Manager)' })
   listAdminReviews() {
     return this.service.listAdminReviews();
@@ -298,7 +298,7 @@ export class StorefrontCmsController {
   @Patch('admin/reviews/:id/status')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('reviews:update|users:read')
   moderateReview(
     @Param('id') id: string,
     @Body() dto: ModerateReviewDto,
@@ -310,7 +310,7 @@ export class StorefrontCmsController {
   @Delete('admin/reviews/:id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('reviews:delete|users:read')
   deleteAdminReview(@Param('id') id: string) {
     return this.service.deleteAdminReview(id);
   }
@@ -318,7 +318,7 @@ export class StorefrontCmsController {
   @Post('admin/reviews/bulk-action')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('reviews:update|users:read')
   @ApiOperation({ summary: 'Modération ou suppression groupée des avis clients' })
   bulkActionReviews(
     @Body() body: { ids: string[]; action: 'STATUS' | 'DELETE'; status?: 'APPROVED' | 'REJECTED' | 'PENDING' },
@@ -330,7 +330,7 @@ export class StorefrontCmsController {
   @Get('notifications')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('notifications:read|users:read')
   listNotifications(@CurrentUser('id') userId: string, @Query() query: any) {
     return this.service.listNotifications(userId, query);
   }
@@ -338,7 +338,7 @@ export class StorefrontCmsController {
   @Post('notifications/bulk-action')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('notifications:update|users:read')
   @ApiOperation({ summary: 'Marquer lu/non lu ou supprimer plusieurs notifications' })
   bulkActionNotifications(
     @Body() body: { ids: string[]; action: 'MARK_READ' | 'MARK_UNREAD' | 'DELETE' },
@@ -349,7 +349,7 @@ export class StorefrontCmsController {
   @Patch('notifications/:id/read')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('notifications:update|users:read')
   toggleNotificationRead(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.service.toggleNotificationRead(id, userId);
   }
@@ -357,7 +357,7 @@ export class StorefrontCmsController {
   @Patch('notifications/read-all')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('notifications:update|users:read')
   markAllNotificationsRead(@CurrentUser('id') userId: string) {
     return this.service.markAllNotificationsRead(userId);
   }
@@ -365,7 +365,7 @@ export class StorefrontCmsController {
   @Delete('notifications/:id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('notifications:delete|users:read')
   deleteNotification(@Param('id') id: string) {
     return this.service.deleteNotification(id);
   }
@@ -495,7 +495,7 @@ export class StorefrontCmsController {
   @Get('support/admin/threads')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('support:read|users:read')
   @ApiOperation({ summary: 'Toutes les discussions Support Client visibles par ROOT / SuperAdmin / Website Manager' })
   listAdminSupportThreads() {
     return this.service.listAdminSupportThreads();
@@ -504,7 +504,7 @@ export class StorefrontCmsController {
   @Post('support/admin/threads/:id/reply')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('support:create|users:read')
   @ApiOperation({ summary: 'Répondre dans une discussion client en tant que ROOT / SuperAdmin / Website Manager' })
   replyAdminSupportThread(
     @Param('id') threadId: string,
@@ -517,7 +517,7 @@ export class StorefrontCmsController {
   @Patch('support/admin/threads/:id/status')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('support:update|users:read')
   updateSupportThreadStatus(@Param('id') id: string, @Body() dto: UpdateSupportStatusDto) {
     return this.service.updateSupportThreadStatus(id, dto);
   }
@@ -525,7 +525,7 @@ export class StorefrontCmsController {
   @Post('support/admin/threads/bulk-action')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('users:read')
+  @Permissions('support:update|users:read')
   @ApiOperation({ summary: 'Changer statut ou supprimer plusieurs fils de discussion Support' })
   bulkActionSupportThreads(
     @Body() body: { ids: string[]; action: 'STATUS' | 'DELETE'; status?: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' },
@@ -585,6 +585,14 @@ export class StorefrontCmsController {
   @Get('visibility-config')
   getVisibilityConfig() {
     return this.service.getSysConfig('visibility');
+  }
+
+  @Get('role-views-config')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Matrice dynamique des vues Dashboard autorisées par rôle' })
+  getRoleViewsConfig() {
+    return this.service.getSysConfig('roleViews');
   }
 
   @Get('cms/testimonials')
@@ -748,7 +756,7 @@ export class StorefrontCmsController {
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
   @Permissions('settings:update')
   updateSysConfig(@Param('key') key: string, @Body() dto: UpdateSysConfigDto, @Req() req: any) {
-    const rootWriteKeys = ['visibility', 'mediaStorage', 'paymentGateways', 'printers', 'aiProvider'];
+    const rootWriteKeys = ['visibility', 'roleViews', 'mediaStorage', 'paymentGateways', 'printers', 'aiProvider'];
     if (rootWriteKeys.includes(key) && !this.isRootRequest(req)) {
       throw new ForbiddenException('Seul le compte ROOT peut modifier cette configuration système.');
     }

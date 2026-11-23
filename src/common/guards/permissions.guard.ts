@@ -31,26 +31,34 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
-    return requiredPermissions.every((permission) => {
-      const normalizedDot = permission.replace(/:/g, '.');
-      const normalizedColon = permission.replace(/\./g, ':');
-      const [domain, action] = normalizedDot.split('.');
-      const isReadLike = action === 'read' || action === 'view';
-      return (
-        user.permissions.includes(permission) ||
-        user.permissions.includes(normalizedDot) ||
-        user.permissions.includes(normalizedColon) ||
-        (isReadLike &&
-          (user.permissions.includes(`${domain}.read_list`) ||
-            user.permissions.includes(`${domain}:read_list`) ||
-            user.permissions.includes(`${domain}.read_detail`) ||
-            user.permissions.includes(`${domain}:read_detail`) ||
-            user.permissions.includes(`${domain}.read`) ||
-            user.permissions.includes(`${domain}:read`))) ||
-        user.permissions.includes(`${domain}.manage`) ||
-        user.permissions.includes(`${domain}:manage`) ||
-        user.permissions.includes('*')
-      );
-    });
+    return requiredPermissions.every((requirement) =>
+      requirement
+        .split('|')
+        .map((candidate) => candidate.trim())
+        .filter(Boolean)
+        .some((permission) => this.matchesPermission(user.permissions, permission)),
+    );
+  }
+
+  private matchesPermission(userPermissions: string[], permission: string): boolean {
+    const normalizedDot = permission.replace(/:/g, '.');
+    const normalizedColon = permission.replace(/\./g, ':');
+    const [domain, action] = normalizedDot.split('.');
+    const isReadLike = action === 'read' || action === 'view';
+    return (
+      userPermissions.includes(permission) ||
+      userPermissions.includes(normalizedDot) ||
+      userPermissions.includes(normalizedColon) ||
+      (isReadLike &&
+        (userPermissions.includes(`${domain}.read_list`) ||
+          userPermissions.includes(`${domain}:read_list`) ||
+          userPermissions.includes(`${domain}.read_detail`) ||
+          userPermissions.includes(`${domain}:read_detail`) ||
+          userPermissions.includes(`${domain}.read`) ||
+          userPermissions.includes(`${domain}:read`))) ||
+      userPermissions.includes(`${domain}.manage`) ||
+      userPermissions.includes(`${domain}:manage`) ||
+      userPermissions.includes('*')
+    );
   }
 }
