@@ -35,7 +35,7 @@ export class CouponsController {
   @Get('public')
   @ApiOperation({ summary: 'Codes promos actifs publics (Vitrine / Espace Client)' })
   findPublicActive() {
-    return this.couponsService.findAll({ isActive: true, page: 1, limit: 20 });
+    return this.couponsService.findAll({ isActive: true, page: 1, limit: 1000 });
   }
 
   @Get()

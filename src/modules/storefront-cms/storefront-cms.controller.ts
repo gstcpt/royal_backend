@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Req,
   Res,
   UploadedFile,
@@ -164,6 +165,17 @@ export class StorefrontCmsController {
     return this.service.deleteContact(id);
   }
 
+  @Post('contacts/bulk-action')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('users:read')
+  @ApiOperation({ summary: 'Action groupée sur les messages de contact (lu, non lu, corbeille, suppression)' })
+  bulkActionContacts(
+    @Body() body: { ids: string[]; action: 'MARK_READ' | 'MARK_UNREAD' | 'TRASH' | 'RESTORE' | 'DELETE' },
+  ) {
+    return this.service.bulkActionContacts(body.ids || [], body.action);
+  }
+
   @Public()
   @Post('newsletter')
   @ApiOperation({ summary: 'Inscription à la newsletter boutique' })
@@ -291,12 +303,35 @@ export class StorefrontCmsController {
     return this.service.deleteAdminReview(id);
   }
 
+  @Post('admin/reviews/bulk-action')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('users:read')
+  @ApiOperation({ summary: 'Modération ou suppression groupée des avis clients' })
+  bulkActionReviews(
+    @Body() body: { ids: string[]; action: 'STATUS' | 'DELETE'; status?: 'APPROVED' | 'REJECTED' | 'PENDING' },
+    @CurrentUser('email') email?: string,
+  ) {
+    return this.service.bulkActionReviews(body.ids || [], body.action, body.status, email);
+  }
+
   @Get('notifications')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
   @Permissions('users:read')
-  listNotifications(@CurrentUser('id') userId: string) {
-    return this.service.listNotifications(userId);
+  listNotifications(@CurrentUser('id') userId: string, @Query() query: any) {
+    return this.service.listNotifications(userId, query);
+  }
+
+  @Post('notifications/bulk-action')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('users:read')
+  @ApiOperation({ summary: 'Marquer lu/non lu ou supprimer plusieurs notifications' })
+  bulkActionNotifications(
+    @Body() body: { ids: string[]; action: 'MARK_READ' | 'MARK_UNREAD' | 'DELETE' },
+  ) {
+    return this.service.bulkActionNotifications(body.ids || [], body.action);
   }
 
   @Patch('notifications/:id/read')
@@ -383,8 +418,18 @@ export class StorefrontCmsController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Notifications personnelles + flux promos/nouveautés/commandes pour le client connecté' })
-  getMyClientNotifications(@CurrentUser('id') userId: string) {
-    return this.service.getClientNotificationsFeed(userId);
+  getMyClientNotifications(@CurrentUser('id') userId: string, @Query() query: any) {
+    return this.service.getClientNotificationsFeed(userId, query);
+  }
+
+  @Post('my-notifications/bulk-action')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Marquer lu/non lu ou supprimer plusieurs notifications client' })
+  bulkActionMyNotifications(
+    @Body() body: { ids: string[]; action: 'MARK_READ' | 'MARK_UNREAD' | 'DELETE' },
+  ) {
+    return this.service.bulkActionNotifications(body.ids || [], body.action);
   }
 
   @Patch('my-notifications/:id/read')
@@ -455,6 +500,17 @@ export class StorefrontCmsController {
   @Permissions('users:read')
   updateSupportThreadStatus(@Param('id') id: string, @Body() dto: UpdateSupportStatusDto) {
     return this.service.updateSupportThreadStatus(id, dto);
+  }
+
+  @Post('support/admin/threads/bulk-action')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('users:read')
+  @ApiOperation({ summary: 'Changer statut ou supprimer plusieurs fils de discussion Support' })
+  bulkActionSupportThreads(
+    @Body() body: { ids: string[]; action: 'STATUS' | 'DELETE'; status?: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' },
+  ) {
+    return this.service.bulkActionSupportThreads(body.ids || [], body.action, body.status);
   }
 
   @Post('reactions/toggle')

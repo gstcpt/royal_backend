@@ -385,6 +385,10 @@ export class OrdersService {
       if (query.endDate) where.createdAt.lte = new Date(query.endDate);
     }
 
+    if (!where.isDeleted) {
+      where.isDeleted = false;
+    }
+
     const [total, orders] = await Promise.all([
       this.prisma.order.count({ where }),
       this.prisma.order.findMany({
@@ -584,5 +588,40 @@ export class OrdersService {
     }
 
     return order;
+  }
+
+  async bulkAction(
+    ids: string[],
+    action: 'STATUS' | 'DELETE',
+    status?: OrderStatus,
+    changedBy = 'admin',
+    comment?: string,
+  ) {
+    const uniqueIds = Array.from(new Set((ids || []).filter(Boolean)));
+    if (uniqueIds.length === 0) {
+      return { updated: 0, skipped: 0, errors: [] as string[] };
+    }
+    if (action === 'DELETE') {
+      const res = await this.prisma.order.updateMany({
+        where: { id: { in: uniqueIds } },
+        data: { isDeleted: true },
+      });
+      return { updated: res.count, skipped: uniqueIds.length - res.count, errors: [] as string[] };
+    }
+    let updated = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+    if (status) {
+      for (const id of uniqueIds) {
+        try {
+          await this.updateStatus(id, status, changedBy, comment);
+          updated++;
+        } catch (err: any) {
+          skipped++;
+          errors.push(err?.message || `Erreur sur ${id}`);
+        }
+      }
+    }
+    return { updated, skipped, errors };
   }
 }

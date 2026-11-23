@@ -614,6 +614,25 @@ export class StorefrontCmsService {
     return { deleted: true };
   }
 
+  async bulkActionContacts(
+    ids: string[],
+    action: 'MARK_READ' | 'MARK_UNREAD' | 'TRASH' | 'RESTORE' | 'DELETE',
+  ) {
+    const cleanIds = Array.from(new Set((ids || []).filter(Boolean)));
+    if (cleanIds.length === 0) return { count: 0 };
+    if (action === 'DELETE') {
+      const r = await this.prisma.contactSubmission.deleteMany({ where: { id: { in: cleanIds } } });
+      return { count: r.count };
+    }
+    const data: any = {};
+    if (action === 'MARK_READ') data.isRead = true;
+    else if (action === 'MARK_UNREAD') data.isRead = false;
+    else if (action === 'TRASH') data.status = 'ARCHIVED';
+    else if (action === 'RESTORE') data.status = 'NEW';
+    const r = await this.prisma.contactSubmission.updateMany({ where: { id: { in: cleanIds } }, data });
+    return { count: r.count };
+  }
+
   async subscribeNewsletter(dto: SubscribeNewsletterDto) {
     const cleanEmail = dto.email.trim().toLowerCase();
     const subscriber = await this.prisma.newsletterSubscriber.upsert({
@@ -698,7 +717,6 @@ export class StorefrontCmsService {
       this.prisma.order.findMany({
         where: { isDeleted: false },
         orderBy: { createdAt: 'desc' },
-        take: 250,
         select: {
           id: true,
           reference: true,
@@ -1285,12 +1303,11 @@ export class StorefrontCmsService {
       grouped.set(pid, prev);
     }
 
-    // Fallback when zero orders yet: compute projected margin catalog from featured/active products
+    // Fallback when zero orders yet: compute projected margin catalog from all active products
     if (grouped.size === 0) {
       const topProducts = await this.prisma.product.findMany({
         where: { isDeleted: false, status: 'ACTIVE' },
         orderBy: [{ isFeatured: 'desc' }, { viewCount: 'desc' }],
-        take: 25,
         include: { category: { select: { name: true } } },
       });
       return topProducts.map((p) => {
@@ -1338,7 +1355,6 @@ export class StorefrontCmsService {
       this.prisma.product.findMany({
         where: { isDeleted: false, status: 'ACTIVE' },
         orderBy: [{ viewCount: 'desc' }, { likeCount: 'desc' }],
-        take: 15,
         select: { id: true, name: true, slug: true, viewCount: true, likeCount: true, favoriteCount: true, createdAt: true },
       }),
       this.prisma.order.count(),
@@ -1411,7 +1427,6 @@ export class StorefrontCmsService {
         { favoriteCount: 'desc' },
         { viewCount: 'desc' },
       ],
-      take: 250,
       select: {
         id: true,
         sku: true,
@@ -1522,25 +1537,128 @@ export class StorefrontCmsService {
     return { deleted: true };
   }
 
-  async listNotifications(_userId: string) {
+  async bulkActionReviews(
+    ids: string[],
+    action: 'STATUS' | 'DELETE',
+    status?: 'APPROVED' | 'REJECTED' | 'PENDING',
+    moderator?: string,
+  ) {
+    const cleanIds = Array.from(new Set((ids || []).filter(Boolean)));
+    if (cleanIds.length === 0) return { count: 0 };
+    if (action === 'DELETE') {
+      const r = await this.prisma.review.deleteMany({ where: { id: { in: cleanIds } } });
+      return { count: r.count };
+    }
+    if (status) {
+      const r = await this.prisma.review.updateMany({
+        where: { id: { in: cleanIds } },
+        data: {
+          status: status as any,
+          moderatedAt: new Date(),
+          moderatedBy: moderator || 'ADMIN',
+        },
+      });
+      return { count: r.count };
+    }
+    return { count: 0 };
+  }
+
+  private mapDashboardNotification(n: any) {
+    const meta = (n.metadata as any) || {};
+    return {
+      id: n.id,
+      type: meta.severity || (n.type === 'LOW_STOCK' ? 'ALERT' : n.type === 'SYSTEM' ? 'INFO' : 'SUCCESS'),
+      title: n.title,
+      message: n.body || '',
+      channel: meta.channel || (n.type === 'LOW_STOCK' ? 'STOCK' : n.type.startsWith('ORDER') ? 'ORDER' : 'SYSTEM'),
+      link: n.link || '/dashboard/community/testimonials',
+      isRead: n.isRead,
+      recipient: meta.targetRoles || 'ROOT / Super Admin / Website Manager',
+      createdAt: n.createdAt,
+    };
+  }
+
+  async listNotifications(_userId: string, query?: any) {
     const rows = await this.prisma.notification.findMany({
       orderBy: { createdAt: 'desc' },
-      take: 100,
     });
-    return rows.map((n) => {
-      const meta = (n.metadata as any) || {};
-      return {
-        id: n.id,
-        type: meta.severity || (n.type === 'LOW_STOCK' ? 'ALERT' : n.type === 'SYSTEM' ? 'INFO' : 'SUCCESS'),
-        title: n.title,
-        message: n.body || '',
-        channel: meta.channel || (n.type === 'LOW_STOCK' ? 'STOCK' : n.type.startsWith('ORDER') ? 'ORDER' : 'SYSTEM'),
-        link: n.link || '/dashboard/community/testimonials',
-        isRead: n.isRead,
-        recipient: meta.targetRoles || 'ROOT / Super Admin / Website Manager',
-        createdAt: n.createdAt,
-      };
+    const allMapped = rows.map((n) => this.mapDashboardNotification(n));
+
+    const wantsPagination =
+      query &&
+      (query.limit !== undefined ||
+        query.offset !== undefined ||
+        query.paginated === 'true');
+
+    if (!wantsPagination) {
+      return allMapped;
+    }
+
+    const totalAll = allMapped.length;
+    const unreadCount = allMapped.filter((n) => !n.isRead).length;
+    const readCount = totalAll - unreadCount;
+    const alertCount = allMapped.filter((n) => n.type === 'ALERT').length;
+
+    const searchQ = String(query?.search || '').trim().toLowerCase();
+    const statusFilter = String(query?.status || 'ALL').toUpperCase();
+    const typeFilter = String(query?.type || 'ALL').toUpperCase();
+    const channelFilter = String(query?.channel || 'ALL').toUpperCase();
+    const startDate = query?.startDate ? new Date(String(query.startDate)) : null;
+    const endDate = query?.endDate ? new Date(String(query.endDate)) : null;
+    if (startDate && !String(query.startDate).includes('T')) startDate.setHours(0, 0, 0, 0);
+    if (endDate && !String(query.endDate).includes('T')) endDate.setHours(23, 59, 59, 999);
+
+    const filtered = allMapped.filter((item) => {
+      if (searchQ) {
+        const hit =
+          item.title.toLowerCase().includes(searchQ) ||
+          item.message.toLowerCase().includes(searchQ) ||
+          item.channel.toLowerCase().includes(searchQ);
+        if (!hit) return false;
+      }
+      if (statusFilter === 'UNREAD' && item.isRead) return false;
+      if (statusFilter === 'READ' && !item.isRead) return false;
+      if (typeFilter !== 'ALL' && item.type !== typeFilter) return false;
+      if (channelFilter !== 'ALL' && item.channel !== channelFilter) return false;
+      if (startDate && new Date(item.createdAt) < startDate) return false;
+      if (endDate && new Date(item.createdAt) > endDate) return false;
+      return true;
     });
+
+    const limit = Math.max(1, Number(query?.limit ?? 10));
+    const offset = Math.max(0, Number(query?.offset ?? 0));
+    const items = filtered.slice(offset, offset + limit);
+
+    return {
+      items,
+      data: items,
+      total: filtered.length,
+      totalAll,
+      unreadCount,
+      readCount,
+      alertCount,
+      hasMore: offset + items.length < filtered.length,
+      offset,
+      limit,
+    };
+  }
+
+  async bulkActionNotifications(
+    ids: string[],
+    action: 'MARK_READ' | 'MARK_UNREAD' | 'DELETE',
+  ) {
+    const cleanIds = Array.from(new Set((ids || []).filter(Boolean)));
+    if (cleanIds.length === 0) return { count: 0 };
+    if (action === 'DELETE') {
+      const r = await this.prisma.notification.deleteMany({ where: { id: { in: cleanIds } } });
+      return { count: r.count };
+    }
+    const markRead = action === 'MARK_READ';
+    const r = await this.prisma.notification.updateMany({
+      where: { id: { in: cleanIds } },
+      data: { isRead: markRead, readAt: markRead ? new Date() : null },
+    });
+    return { count: r.count };
   }
 
   async toggleNotificationRead(id: string, _userId: string) {
@@ -2215,25 +2333,23 @@ export class StorefrontCmsService {
   }
 
   // ── Client Notifications Feed (Personal DB notifications + Order/Promo/Catalog Updates) ──
-  async getClientNotificationsFeed(userId: string) {
+  async getClientNotificationsFeed(userId: string, query?: any) {
     const { customer } = await this.resolveOrCreateCustomer(userId);
     const [ownPersonalRows, recentOrderHistory, newestProducts, promoProducts, activeCoupons] =
       await Promise.all([
         this.prisma.notification.findMany({
           where: { OR: [{ userId }, { userId: null }] },
           orderBy: { createdAt: 'desc' },
-          take: 50,
         }),
         this.prisma.orderStatusHistory.findMany({
           where: { order: { customerId: customer.id, isDeleted: false } },
           orderBy: { createdAt: 'desc' },
-          take: 15,
           include: { order: { select: { reference: true, totalAmount: true } } },
         }),
         this.prisma.product.findMany({
           where: { status: 'ACTIVE', deletedAt: null },
           orderBy: { createdAt: 'desc' },
-          take: 8,
+          take: 30,
           select: {
             id: true,
             name: true,
@@ -2252,7 +2368,6 @@ export class StorefrontCmsService {
             discountPrice: { not: null },
           },
           orderBy: { updatedAt: 'desc' },
-          take: 10,
           select: {
             id: true,
             name: true,
@@ -2266,7 +2381,6 @@ export class StorefrontCmsService {
         this.prisma.coupon.findMany({
           where: { isActive: true },
           orderBy: { createdAt: 'desc' },
-          take: 8,
         }),
       ]);
 
@@ -2275,7 +2389,6 @@ export class StorefrontCmsService {
         ? ownPersonalRows
         : await this.prisma.notification.findMany({
             orderBy: { createdAt: 'desc' },
-            take: 25,
           });
 
     const notifications = personalRows.map((n) => {
@@ -2358,7 +2471,44 @@ export class StorefrontCmsService {
 
     catalogFeed.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    return { notifications, catalogFeed: catalogFeed.slice(0, 30) };
+    const unreadCount = notifications.filter((n) => !n.isRead).length;
+    const personalTotal = notifications.length;
+    const feedTotal = catalogFeed.length;
+
+    const wantsPagination =
+      query &&
+      (query.limit !== undefined ||
+        query.offset !== undefined ||
+        query.feedLimit !== undefined ||
+        query.feedOffset !== undefined);
+
+    if (wantsPagination) {
+      const limit = Math.max(1, Number(query?.limit ?? 10));
+      const offset = Math.max(0, Number(query?.offset ?? 0));
+      const feedLimit = Math.max(1, Number(query?.feedLimit ?? limit));
+      const feedOffset = Math.max(0, Number(query?.feedOffset ?? 0));
+      const pagedNotifications = notifications.slice(offset, offset + limit);
+      const pagedFeed = catalogFeed.slice(feedOffset, feedOffset + feedLimit);
+      return {
+        notifications: pagedNotifications,
+        personalTotal,
+        personalHasMore: offset + pagedNotifications.length < personalTotal,
+        unreadCount,
+        catalogFeed: pagedFeed,
+        feedTotal,
+        feedHasMore: feedOffset + pagedFeed.length < feedTotal,
+      };
+    }
+
+    return {
+      notifications,
+      personalTotal,
+      personalHasMore: false,
+      unreadCount,
+      catalogFeed,
+      feedTotal,
+      feedHasMore: false,
+    };
   }
 
   // ── Client <-> Royal Support Multi-Admin Discussions (ROOT, SUPER_ADMIN, WEBSITE_MANAGER) ──
@@ -2397,7 +2547,6 @@ export class StorefrontCmsService {
         include: {
           messages: { orderBy: { createdAt: 'asc' } },
         },
-        take: 20,
       });
     }
 
@@ -2494,6 +2643,27 @@ export class StorefrontCmsService {
         messages: { orderBy: { createdAt: 'asc' } },
       },
     });
+  }
+
+  async bulkActionSupportThreads(
+    ids: string[],
+    action: 'STATUS' | 'DELETE',
+    status?: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED',
+  ) {
+    const cleanIds = Array.from(new Set((ids || []).filter(Boolean)));
+    if (cleanIds.length === 0) return { count: 0 };
+    if (action === 'DELETE') {
+      const r = await this.prisma.supportThread.deleteMany({ where: { id: { in: cleanIds } } });
+      return { count: r.count };
+    }
+    if (status) {
+      const r = await this.prisma.supportThread.updateMany({
+        where: { id: { in: cleanIds } },
+        data: { status: status as any },
+      });
+      return { count: r.count };
+    }
+    return { count: 0 };
   }
 
   async replyAdminSupportThread(
@@ -4611,7 +4781,7 @@ export class StorefrontCmsService {
     return undefined;
   }
 
-  async getCustomersList(limit = 200, search?: string) {
+  async getCustomersList(limit = 0, search?: string, page = 1) {
     const where: any = { deletedAt: null };
     if (search?.trim()) {
       const q = search.trim();
@@ -4622,33 +4792,52 @@ export class StorefrontCmsService {
         { phone: { contains: q, mode: 'insensitive' } },
       ];
     }
-    const [customers, metaRow] = await Promise.all([
+    const usePagination = Number(limit) > 0;
+    const take = usePagination ? Math.max(1, Number(limit)) : undefined;
+    const skip = usePagination ? (Math.max(1, Number(page || 1)) - 1) * take! : undefined;
+
+    const [totalCustomers, customers, orderStats, metaRow] = await Promise.all([
+      this.prisma.customer.count({ where }),
       this.prisma.customer.findMany({
         where,
-        take: Math.min(500, Math.max(1, limit)),
+        ...(take ? { skip, take } : {}),
         orderBy: { createdAt: 'desc' },
         include: {
           addresses: { orderBy: { isDefault: 'desc' }, take: 2 },
           orders: {
             where: { isDeleted: false },
             orderBy: { createdAt: 'desc' },
-            take: 5,
+            take: 10,
             select: { reference: true, createdAt: true, totalAmount: true, status: true },
           },
         },
       }),
+      this.prisma.order.groupBy({
+        by: ['customerId'],
+        where: { isDeleted: false, status: { not: 'CANCELLED' }, customerId: { not: null } },
+        _count: { _all: true },
+        _sum: { totalAmount: true },
+      }),
       this.prisma.settings.findUnique({ where: { key: 'sys.customersMeta' } }),
     ]);
 
+    const orderStatMap = new Map(
+      orderStats.map((s) => [
+        s.customerId,
+        { count: s._count._all, sum: Number(s._sum.totalAmount || 0) },
+      ]),
+    );
     const metaMap = this.parseJsonSetting<Record<string, any>>(metaRow?.value, {});
     const items = customers.map((c) => {
       const extra = metaMap[c.id] || {};
       const defaultAddr = c.addresses?.[0];
-      const computedOrders = c.totalOrders > 0 ? c.totalOrders : c.orders.length;
-      const computedSpent =
-        Number(c.totalSpent || 0) > 0
-          ? Number(c.totalSpent)
-          : c.orders.reduce((s, o) => s + Number(o.totalAmount || 0), 0);
+      const liveStat = orderStatMap.get(c.id);
+      const computedOrders = Math.max(c.totalOrders || 0, liveStat?.count || 0, c.orders.length);
+      const computedSpent = Math.max(
+        Number(c.totalSpent || 0),
+        liveStat?.sum || 0,
+        c.orders.reduce((s, o) => s + Number(o.totalAmount || 0), 0),
+      );
 
       return {
         id: c.id,
@@ -4677,7 +4866,17 @@ export class StorefrontCmsService {
       };
     });
 
-    return { items, data: items, total: items.length };
+    return {
+      items,
+      data: items,
+      total: totalCustomers,
+      meta: {
+        page: Math.max(1, Number(page || 1)),
+        limit: take || totalCustomers,
+        total: totalCustomers,
+        totalPages: take ? Math.ceil(totalCustomers / take) : 1,
+      },
+    };
   }
 
   async createCustomerRecord(body: any) {

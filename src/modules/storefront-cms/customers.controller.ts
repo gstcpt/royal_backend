@@ -31,9 +31,16 @@ export class CustomersController {
 
   @Get()
   @ApiOperation({ summary: 'Lister les fiches clients PostgreSQL avec agrégats commandes' })
-  findAll(@Req() req: any, @Query('limit') limit?: string, @Query('search') search?: string) {
+  findAll(
+    @Req() req: any,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+  ) {
     this.ensureStaff(req);
-    return this.service.getCustomersList(limit ? Number(limit) : 200, search);
+    const parsedLimit = limit !== undefined && limit !== '' ? Number(limit) : 0;
+    const parsedPage = page !== undefined && page !== '' ? Number(page) : 1;
+    return this.service.getCustomersList(parsedLimit, search, parsedPage);
   }
 
   @Post()

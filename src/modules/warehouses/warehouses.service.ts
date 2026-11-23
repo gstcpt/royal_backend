@@ -65,7 +65,6 @@ export class WarehousesService {
               },
             },
           },
-          take: 50,
         },
       },
     });

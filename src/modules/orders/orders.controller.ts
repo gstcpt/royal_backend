@@ -82,4 +82,17 @@ export class OrdersController {
     const changedBy = req.user?.email || req.user?.id || 'admin';
     return this.ordersService.updateStatus(id, dto.status, changedBy, dto.comment);
   }
+
+  @Post('bulk-action')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('orders:update')
+  @ApiOperation({ summary: 'Mise à jour de statut ou archivage groupé de commandes' })
+  bulkAction(
+    @Body() body: { ids: string[]; action: 'STATUS' | 'DELETE'; status?: any; comment?: string },
+    @Req() req: any,
+  ) {
+    const changedBy = req.user?.email || req.user?.id || 'admin';
+    return this.ordersService.bulkAction(body.ids || [], body.action, body.status, changedBy, body.comment);
+  }
 }

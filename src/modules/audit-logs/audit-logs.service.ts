@@ -202,7 +202,7 @@ export class AuditLogsService {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    const [totalLogs, todayLogs, criticalActions, uniqueActors] = await Promise.all([
+    const [totalLogs, todayLogs, criticalActions, uniqueActors, distinctActions, distinctResources] = await Promise.all([
       this.prisma.auditLog.count(),
       this.prisma.auditLog.count({
         where: { createdAt: { gte: startOfToday } },
@@ -217,6 +217,14 @@ export class AuditLogsService {
         _count: { _all: true },
         where: { actorEmail: { not: null } },
       }),
+      this.prisma.auditLog.groupBy({
+        by: ['action'],
+        _count: { _all: true },
+      }),
+      this.prisma.auditLog.groupBy({
+        by: ['resourceType'],
+        _count: { _all: true },
+      }),
     ]);
 
     return {
@@ -224,6 +232,9 @@ export class AuditLogsService {
       todayLogs,
       criticalActions,
       uniqueActorsCount: uniqueActors.length || 1,
+      actions: distinctActions.map((a) => a.action).filter(Boolean).sort(),
+      resourceTypes: distinctResources.map((r) => r.resourceType).filter(Boolean).sort(),
+      actors: uniqueActors.map((a) => a.actorEmail).filter(Boolean).sort(),
     };
   }
 }
