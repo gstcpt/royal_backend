@@ -48,8 +48,26 @@ export class CreateUserDto {
   @IsOptional()
   warehouseId?: string;
 
-  @ApiPropertyOptional({ description: 'ID du point de vente assigné (pour Cashier)' })
+  @ApiPropertyOptional({ description: 'IDs des dépôts assignés (multi-sélection Magasinier)' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  warehouseIds?: string[];
+
+  @ApiPropertyOptional({ description: 'ID du point de vente assigné (pour Vendeur / Caissier)' })
   @IsString()
   @IsOptional()
   posId?: string;
+
+  @ApiPropertyOptional({ description: 'IDs des showrooms assignés (multi-sélection Vendeur)' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  posIds?: string[];
+
+  @ApiPropertyOptional({ description: 'IDs des caisses assignées (multi-sélection Caissier)' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  cashRegisterIds?: string[];
 }

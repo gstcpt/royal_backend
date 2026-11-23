@@ -75,9 +75,39 @@ export class AuditInterceptor implements NestInterceptor {
     const clientIp = (ip || headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1') as string;
     const userAgent = (headers['user-agent'] as string) || 'Royal-Client';
 
-    // Pre-fetch before state if mutating existing entity
+    const isFastInteractiveRoute =
+      cleanUrl.includes('/cart') ||
+      cleanUrl.includes('/reactions/') ||
+      cleanUrl.includes('/wishlist/') ||
+      cleanUrl.includes('/notifications') ||
+      cleanUrl.includes('/contacts/read-all') ||
+      cleanUrl.includes('/auth/refresh');
+
+    const skipSnapshot =
+      isFastInteractiveRoute ||
+      cleanUrl.includes('/storefront-cms/sys-config') ||
+      !['PUT', 'PATCH', 'DELETE'].includes(method) ||
+      !resourceId;
+
+    const compactAuditPayload = (val: any): any => {
+      if (!val || typeof val !== 'object') return val ?? null;
+      if (Array.isArray(val)) {
+        return val.length > 20 ? { count: val.length, preview: val.slice(0, 5) } : val;
+      }
+      if (Array.isArray(val.value) && val.value.length > 20) {
+        return { ...val, value: `[${val.value.length} items]` };
+      }
+      if (Array.isArray(val.items) && val.items.length > 20) {
+        return { ...val, items: `[${val.items.length} items]` };
+      }
+      return val;
+    };
+
+    const safeSanitizedBody = compactAuditPayload(sanitizedBody);
+
+    // Pre-fetch before state only for structural admin entity updates
     return from(
-      ['PUT', 'PATCH', 'DELETE'].includes(method) && resourceId
+      !skipSnapshot
         ? this.auditLogsService.getEntitySnapshot(tableName, resourceId)
         : Promise.resolve(null),
     ).pipe(
@@ -85,11 +115,19 @@ export class AuditInterceptor implements NestInterceptor {
         next.handle().pipe(
           tap({
             next: (resData) => {
-              const afterData = resData?.data !== undefined ? resData.data : resData;
-              const diff = this.auditLogsService.computeDiff(
-                beforeSnapshot,
-                afterData || sanitizedBody,
-              );
+              if (isFastInteractiveRoute && action !== 'LOGIN' && action !== 'LOGOUT') {
+                return;
+              }
+              const rawAfter = resData?.data !== undefined ? resData.data : resData;
+              const afterData = compactAuditPayload(rawAfter);
+              const diff = skipSnapshot
+                ? safeSanitizedBody
+                  ? { payload: safeSanitizedBody }
+                  : null
+                : this.auditLogsService.computeDiff(
+                    beforeSnapshot,
+                    afterData || safeSanitizedBody,
+                  );
 
               let description = `Opération [${method}] ${originalUrl} complétée avec succès`;
               if (action === 'TOGGLE_VISIBILITY') {
@@ -113,7 +151,7 @@ export class AuditInterceptor implements NestInterceptor {
                 description = `Rafraîchissement de session sécurisée (${actorEmail})`;
               }
 
-              this.auditLogsService.recordLog({
+              void this.auditLogsService.recordLog({
                 actorId,
                 actorEmail,
                 actorName,
@@ -123,14 +161,14 @@ export class AuditInterceptor implements NestInterceptor {
                 tableName,
                 description,
                 before: beforeSnapshot,
-                after: afterData || sanitizedBody || null,
-                diffJson: diff || (sanitizedBody ? { payload: sanitizedBody } : null),
+                after: afterData || safeSanitizedBody || null,
+                diffJson: diff,
                 ipAddress: clientIp,
                 userAgent,
               });
             },
             error: (err) => {
-              this.auditLogsService.recordLog({
+              void this.auditLogsService.recordLog({
                 actorId,
                 actorEmail,
                 actorName,
@@ -143,7 +181,7 @@ export class AuditInterceptor implements NestInterceptor {
                 }`,
                 before: beforeSnapshot,
                 after: null,
-                diffJson: { error: err?.message || 'Erreur', payload: sanitizedBody },
+                diffJson: { error: err?.message || 'Erreur', payload: safeSanitizedBody },
                 ipAddress: clientIp,
                 userAgent,
               });

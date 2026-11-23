@@ -17,6 +17,7 @@ import { RegisterDto } from './dto/register.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SystemRole } from '@royal/shared-types';
 import { sendSmtpMailWithAttachments } from '../storefront-cms/utils/pdf-smtp.helper';
+import { invalidateSessionCache, invalidateUserSessionCache } from './strategies/jwt.strategy';
 
 @Injectable()
 export class AuthService {
@@ -532,14 +533,17 @@ export class AuthService {
         `Revoked refresh token reuse attempt detected for user ${existingRefreshToken.userId}! Revoking all sessions for security.`,
       );
       // Revoke all sessions of this user if an already revoked token is used (detect theft)
-      await this.prisma.refreshToken.updateMany({
-        where: { userId: existingRefreshToken.userId },
-        data: { isRevoked: true },
-      });
-      await this.prisma.session.updateMany({
-        where: { userId: existingRefreshToken.userId },
-        data: { isActive: false },
-      });
+      await Promise.all([
+        this.prisma.refreshToken.updateMany({
+          where: { userId: existingRefreshToken.userId },
+          data: { isRevoked: true },
+        }),
+        this.prisma.session.updateMany({
+          where: { userId: existingRefreshToken.userId },
+          data: { isActive: false },
+        }),
+      ]);
+      invalidateUserSessionCache(existingRefreshToken.userId);
       throw new UnauthorizedException('Jeton révoqué. Déconnexion de sécurité effectuée.');
     }
 
@@ -561,37 +565,33 @@ export class AuthService {
       throw new UnauthorizedException('Session inactive');
     }
 
-    // Rotate refresh token: revoke current token and create a brand new one
-    await this.prisma.refreshToken.update({
-      where: { id: existingRefreshToken.id },
-      data: { isRevoked: true },
-    });
-
+    // Rotate refresh token, update session, and load permissions in parallel
     const newRawRefreshToken = this.generateSecureRandomToken();
     const newTokenHash = this.hashToken(newRawRefreshToken);
 
-    await this.prisma.refreshToken.create({
-      data: {
-        userId: user.id,
-        sessionId: session.id,
-        tokenHash: newTokenHash,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      },
-    });
-
-    // Update session activity
-    await this.prisma.session.update({
-      where: { id: session.id },
-      data: {
-        lastActiveAt: new Date(),
-        ipAddress: metadata?.ipAddress || session.ipAddress,
-        userAgent: metadata?.userAgent || session.userAgent,
-      },
-    });
-
-    // Issue new access token
-    const { roles, permissions, warehouseId, posId } =
-      await this.getUserPermissionsAndRoles(user.id);
+    const [, , , { roles, permissions, warehouseId, posId }] = await Promise.all([
+      this.prisma.refreshToken.update({
+        where: { id: existingRefreshToken.id },
+        data: { isRevoked: true },
+      }),
+      this.prisma.refreshToken.create({
+        data: {
+          userId: user.id,
+          sessionId: session.id,
+          tokenHash: newTokenHash,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      }),
+      this.prisma.session.update({
+        where: { id: session.id },
+        data: {
+          lastActiveAt: new Date(),
+          ipAddress: metadata?.ipAddress || session.ipAddress,
+          userAgent: metadata?.userAgent || session.userAgent,
+        },
+      }),
+      this.getUserPermissionsAndRoles(user.id),
+    ]);
 
     const accessToken = await this.jwtService.signAsync(
       {
@@ -626,15 +626,17 @@ export class AuthService {
       return { success: true };
     }
 
-    await this.prisma.session.updateMany({
-      where: { id: sessionId },
-      data: { isActive: false },
-    });
-
-    await this.prisma.refreshToken.updateMany({
-      where: { sessionId },
-      data: { isRevoked: true },
-    });
+    invalidateSessionCache(sessionId);
+    await Promise.all([
+      this.prisma.session.updateMany({
+        where: { id: sessionId },
+        data: { isActive: false },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { sessionId },
+        data: { isRevoked: true },
+      }),
+    ]);
 
     return {
       success: true,
@@ -646,15 +648,17 @@ export class AuthService {
    * Log out from ALL sessions for a given user
    */
   async logoutAll(userId: string) {
-    await this.prisma.session.updateMany({
-      where: { userId },
-      data: { isActive: false },
-    });
-
-    await this.prisma.refreshToken.updateMany({
-      where: { userId },
-      data: { isRevoked: true },
-    });
+    invalidateUserSessionCache(userId);
+    await Promise.all([
+      this.prisma.session.updateMany({
+        where: { userId },
+        data: { isActive: false },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId },
+        data: { isRevoked: true },
+      }),
+    ]);
 
     return {
       success: true,
@@ -666,28 +670,28 @@ export class AuthService {
    * Return the profile and full permissions of the authenticated user
    */
   async getMe(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        avatar: true,
-        isActive: true,
-        isEmailVerified: true,
-        lastLoginAt: true,
-        createdAt: true,
-      },
-    });
+    const [user, { roles, permissions, warehouseId, posId }] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          avatar: true,
+          isActive: true,
+          isEmailVerified: true,
+          lastLoginAt: true,
+          createdAt: true,
+        },
+      }),
+      this.getUserPermissionsAndRoles(userId),
+    ]);
 
     if (!user) {
       throw new NotFoundException('Utilisateur introuvable');
     }
-
-    const { roles, permissions, warehouseId, posId } =
-      await this.getUserPermissionsAndRoles(userId);
 
     return {
       ...user,

@@ -145,8 +145,20 @@ export class StorefrontCmsController {
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
   @Permissions('users:read')
   @ApiOperation({ summary: 'Lister les messages de contact (Dashboard)' })
-  listContacts() {
-    return this.service.listContacts();
+  listContacts(@Query('limit') limit?: string) {
+    const parsedLimit = limit !== undefined ? Number(limit) : undefined;
+    return this.service.listContacts(
+      Number.isFinite(parsedLimit) && (parsedLimit as number) > 0 ? parsedLimit : undefined,
+    );
+  }
+
+  @Patch('contacts/read-all')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('users:read')
+  @ApiOperation({ summary: 'Marquer tous les messages de contact comme lus' })
+  markAllContactsRead() {
+    return this.service.markAllContactsRead();
   }
 
   @Patch('contacts/:id')

@@ -58,8 +58,26 @@ export class UpdateUserDto {
   @IsOptional()
   warehouseId?: string;
 
+  @ApiPropertyOptional({ description: 'IDs des dépôts assignés (multi-sélection Magasinier)' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  warehouseIds?: string[];
+
   @ApiPropertyOptional()
   @IsString()
   @IsOptional()
   posId?: string;
+
+  @ApiPropertyOptional({ description: 'IDs des showrooms assignés (multi-sélection Vendeur)' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  posIds?: string[];
+
+  @ApiPropertyOptional({ description: 'IDs des caisses assignées (multi-sélection Caissier)' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  cashRegisterIds?: string[];
 }

@@ -163,21 +163,62 @@ export class CartService {
     };
   }
 
+  private async ensureCartId(sessionId?: string, customerId?: string): Promise<string> {
+    if (!sessionId && !customerId) {
+      throw new BadRequestException('Un identifiant de session ou de client est requis pour le panier.');
+    }
+
+    if (customerId) {
+      const existing = await this.prisma.cart.findFirst({
+        where: { customerId },
+        select: { id: true },
+      });
+      if (existing) return existing.id;
+    }
+
+    if (sessionId) {
+      const sessionCart = await this.prisma.cart.findFirst({
+        where: { sessionId },
+        select: { id: true, customerId: true },
+      });
+      if (sessionCart) {
+        if (customerId && !sessionCart.customerId) {
+          await this.prisma.cart.update({
+            where: { id: sessionCart.id },
+            data: { customerId },
+          });
+        }
+        return sessionCart.id;
+      }
+    }
+
+    const created = await this.prisma.cart.create({
+      data: {
+        sessionId,
+        customerId,
+        currency: 'TND',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+      select: { id: true },
+    });
+    return created.id;
+  }
+
   async addItem(dto: AddToCartDto, sessionId?: string, customerId?: string) {
-    const cart = await this.getOrCreateCart(sessionId, customerId);
+    const cartId = await this.ensureCartId(sessionId, customerId);
 
     // Verify product & variant
     let variantId = dto.variantId;
     let productId = dto.productId;
 
     if (variantId && !productId) {
-      const v = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
+      const v = await this.prisma.productVariant.findUnique({ where: { id: variantId }, select: { id: true, productId: true } });
       if (v) {
         productId = v.productId;
       } else {
-        // Fallback if a productId was mistakenly passed as variantId
         const firstVariant = await this.prisma.productVariant.findFirst({
           where: { productId: variantId, isActive: true },
+          select: { id: true, productId: true },
         });
         if (!firstVariant) {
           throw new NotFoundException('Variante de produit introuvable.');
@@ -188,6 +229,7 @@ export class CartService {
     } else if (!variantId && productId) {
       const firstVariant = await this.prisma.productVariant.findFirst({
         where: { productId, isActive: true },
+        select: { id: true },
       });
       if (!firstVariant) {
         throw new NotFoundException('Aucune variante disponible pour ce produit.');
@@ -202,11 +244,12 @@ export class CartService {
     const existingItem = await this.prisma.cartItem.findUnique({
       where: {
         cartId_productId_variantId: {
-          cartId: cart.id,
+          cartId,
           productId,
           variantId,
         },
       },
+      select: { id: true, quantity: true },
     });
 
     if (existingItem) {
@@ -217,7 +260,7 @@ export class CartService {
     } else {
       await this.prisma.cartItem.create({
         data: {
-          cartId: cart.id,
+          cartId,
           productId,
           variantId,
           quantity: dto.quantity,
@@ -260,9 +303,9 @@ export class CartService {
   }
 
   async clearCart(sessionId?: string, customerId?: string) {
-    const cart = await this.getOrCreateCart(sessionId, customerId);
+    const cartId = await this.ensureCartId(sessionId, customerId);
     await this.prisma.cartItem.deleteMany({
-      where: { cartId: cart.id },
+      where: { cartId },
     });
 
     return this.getCart(sessionId, customerId);

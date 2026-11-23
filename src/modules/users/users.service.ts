@@ -14,6 +14,13 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
 import { SystemRole } from '@royal/shared-types';
+import { invalidateUserSessionCache } from '../auth/strategies/jwt.strategy';
+
+interface UserAssignmentRecord {
+  warehouseIds?: string[];
+  posIds?: string[];
+  cashRegisterIds?: string[];
+}
 
 @Injectable()
 export class UsersService {
@@ -46,6 +53,132 @@ export class UsersService {
     });
     if (!rootRole) return false;
     return roleIds.includes(rootRole.id);
+  }
+
+  private async loadAssignmentsMap(): Promise<Record<string, UserAssignmentRecord>> {
+    try {
+      const row = await this.prisma.settings.findUnique({ where: { key: 'sys.userAssignments' } });
+      if (!row?.value) return {};
+      const parsed = JSON.parse(row.value);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private async saveUserAssignments(
+    userId: string,
+    assignments: UserAssignmentRecord,
+    updatedBy?: string,
+  ) {
+    const currentMap = await this.loadAssignmentsMap();
+    const warehouseIds = Array.from(new Set((assignments.warehouseIds || []).filter(Boolean)));
+    const posIds = Array.from(new Set((assignments.posIds || []).filter(Boolean)));
+    const cashRegisterIds = Array.from(new Set((assignments.cashRegisterIds || []).filter(Boolean)));
+
+    if (warehouseIds.length === 0 && posIds.length === 0 && cashRegisterIds.length === 0) {
+      delete currentMap[userId];
+    } else {
+      currentMap[userId] = { warehouseIds, posIds, cashRegisterIds };
+    }
+
+    await this.prisma.settings.upsert({
+      where: { key: 'sys.userAssignments' },
+      update: { value: JSON.stringify(currentMap), group: 'system', updatedBy: updatedBy || 'ADMIN' },
+      create: {
+        key: 'sys.userAssignments',
+        value: JSON.stringify(currentMap),
+        group: 'system',
+        isSecret: false,
+        updatedBy: updatedBy || 'ADMIN',
+      },
+    });
+  }
+
+  /**
+   * Resolve relational UserRole pairs plus full warehouse / showroom / cash register labels
+   */
+  private async resolveRelationalLocations(dto: {
+    warehouseId?: string;
+    warehouseIds?: string[];
+    posId?: string;
+    posIds?: string[];
+    cashRegisterIds?: string[];
+  }) {
+    const warehouseIds = Array.from(
+      new Set([
+        ...(Array.isArray(dto.warehouseIds) ? dto.warehouseIds : []),
+        ...(dto.warehouseId ? [dto.warehouseId] : []),
+      ].filter(Boolean)),
+    );
+    const cashRegisterIds = Array.from(
+      new Set((Array.isArray(dto.cashRegisterIds) ? dto.cashRegisterIds : []).filter(Boolean)),
+    );
+    const directPosIds = Array.from(
+      new Set([
+        ...(Array.isArray(dto.posIds) ? dto.posIds : []),
+        ...(dto.posId ? [dto.posId] : []),
+      ].filter(Boolean)),
+    );
+
+    let derivedRegisterPosIds: string[] = [];
+    if (cashRegisterIds.length > 0) {
+      const regs = await this.prisma.cashRegister.findMany({
+        where: { id: { in: cashRegisterIds } },
+        select: { posId: true },
+      });
+      derivedRegisterPosIds = regs.map((r) => r.posId).filter(Boolean);
+    }
+
+    const posIds = Array.from(new Set([...directPosIds, ...derivedRegisterPosIds]));
+    return { warehouseIds, posIds, directPosIds, cashRegisterIds };
+  }
+
+  private async insertRoleLocations(
+    tx: any,
+    userId: string,
+    roleIds: string[],
+    warehouseIds: string[],
+    posIds: string[],
+    assignedBy?: string,
+  ) {
+    const combos = new Set<string>();
+    const rows: Array<{
+      userId: string;
+      roleId: string;
+      warehouseId: string | null;
+      posId: string | null;
+      assignedBy: string | null;
+    }> = [];
+
+    for (const roleId of roleIds) {
+      if (warehouseIds.length === 0 && posIds.length === 0) {
+        const key = `${roleId}|null|null`;
+        if (!combos.has(key)) {
+          combos.add(key);
+          rows.push({ userId, roleId, warehouseId: null, posId: null, assignedBy: assignedBy || null });
+        }
+      } else {
+        for (const wId of warehouseIds) {
+          const key = `${roleId}|${wId}|null`;
+          if (!combos.has(key)) {
+            combos.add(key);
+            rows.push({ userId, roleId, warehouseId: wId, posId: null, assignedBy: assignedBy || null });
+          }
+        }
+        for (const pId of posIds) {
+          const key = `${roleId}|null|${pId}`;
+          if (!combos.has(key)) {
+            combos.add(key);
+            rows.push({ userId, roleId, warehouseId: null, posId: pId, assignedBy: assignedBy || null });
+          }
+        }
+      }
+    }
+
+    for (const row of rows) {
+      await tx.userRole.create({ data: row });
+    }
   }
 
   /**
@@ -103,7 +236,7 @@ export class UsersService {
       };
     }
 
-    const [total, users] = await Promise.all([
+    const [total, users, assignmentsMap, warehousesList, posList, registersList] = await Promise.all([
       this.prisma.user.count({ where }),
       this.prisma.user.findMany({
         where,
@@ -130,28 +263,55 @@ export class UsersService {
           },
         },
       }),
+      this.loadAssignmentsMap(),
+      this.prisma.warehouse.findMany({ select: { id: true, name: true, code: true } }),
+      this.prisma.pointOfSale.findMany({ select: { id: true, name: true, code: true } }),
+      this.prisma.cashRegister.findMany({
+        select: { id: true, name: true, posId: true, pos: { select: { name: true } } },
+      }),
     ]);
 
-    const formattedUsers = users.map((user) => ({
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      phone: user.phone,
-      avatar: user.avatar,
-      isActive: user.isActive,
-      isEmailVerified: user.isEmailVerified,
-      lastLoginAt: user.lastLoginAt,
-      createdAt: user.createdAt,
-      roles: user.userRoles.map((ur) => ur.role.name),
-      roleDetails: user.userRoles.map((ur) => ({
-        id: ur.role.id,
-        name: ur.role.name,
-        displayName: ur.role.displayName,
-        warehouse: ur.warehouse,
-        pos: ur.pos,
-      })),
-    }));
+    const warehouseById = new Map(warehousesList.map((w) => [w.id, w]));
+    const posById = new Map(posList.map((p) => [p.id, p]));
+    const regById = new Map(
+      registersList.map((r) => [r.id, { id: r.id, name: r.name, posId: r.posId, posName: r.pos?.name || '' }]),
+    );
+
+    const formattedUsers = users.map((user) => {
+      const saved = assignmentsMap[user.id] || {};
+      const relWhIds = user.userRoles.map((ur) => ur.warehouse?.id).filter(Boolean) as string[];
+      const relPosIds = user.userRoles.map((ur) => ur.pos?.id).filter(Boolean) as string[];
+      const warehouseIds = Array.from(new Set([...(saved.warehouseIds || []), ...relWhIds]));
+      const cashRegisterIds = Array.from(new Set(saved.cashRegisterIds || []));
+      const posIds = Array.from(new Set([...(saved.posIds || []), ...(cashRegisterIds.length === 0 ? relPosIds : [])]));
+
+      return {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        avatar: user.avatar,
+        isActive: user.isActive,
+        isEmailVerified: user.isEmailVerified,
+        lastLoginAt: user.lastLoginAt,
+        createdAt: user.createdAt,
+        roles: Array.from(new Set(user.userRoles.map((ur) => ur.role.name))),
+        roleDetails: user.userRoles.map((ur) => ({
+          id: ur.role.id,
+          name: ur.role.name,
+          displayName: ur.role.displayName,
+          warehouse: ur.warehouse,
+          pos: ur.pos,
+        })),
+        warehouseIds,
+        posIds,
+        cashRegisterIds,
+        assignedWarehouses: warehouseIds.map((wid) => warehouseById.get(wid)).filter(Boolean),
+        assignedShowrooms: posIds.map((pid) => posById.get(pid)).filter(Boolean),
+        assignedCashRegisters: cashRegisterIds.map((cid) => regById.get(cid)).filter(Boolean),
+      };
+    });
 
     return {
       data: formattedUsers,
@@ -168,37 +328,45 @@ export class UsersService {
    * Find single user by ID with full role and permission breakdown
    */
   async findById(id: string) {
-    const user = await this.prisma.user.findFirst({
-      where: { id, deletedAt: null },
-      include: {
-        userRoles: {
-          include: {
-            role: {
-              include: {
-                rolePermissions: {
-                  include: {
-                    permission: true,
+    const [user, assignmentsMap, warehousesList, posList, registersList] = await Promise.all([
+      this.prisma.user.findFirst({
+        where: { id, deletedAt: null },
+        include: {
+          userRoles: {
+            include: {
+              role: {
+                include: {
+                  rolePermissions: {
+                    include: {
+                      permission: true,
+                    },
                   },
                 },
               },
+              warehouse: { select: { id: true, name: true, code: true } },
+              pos: { select: { id: true, name: true, code: true } },
             },
-            warehouse: { select: { id: true, name: true, code: true } },
-            pos: { select: { id: true, name: true, code: true } },
+          },
+          userPermissions: {
+            include: {
+              permission: true,
+            },
           },
         },
-        userPermissions: {
-          include: {
-            permission: true,
-          },
-        },
-      },
-    });
+      }),
+      this.loadAssignmentsMap(),
+      this.prisma.warehouse.findMany({ select: { id: true, name: true, code: true } }),
+      this.prisma.pointOfSale.findMany({ select: { id: true, name: true, code: true } }),
+      this.prisma.cashRegister.findMany({
+        select: { id: true, name: true, posId: true, pos: { select: { name: true } } },
+      }),
+    ]);
 
     if (!user) {
       throw new NotFoundException('Utilisateur introuvable');
     }
 
-    const roles = user.userRoles.map((ur) => ur.role.name);
+    const roles = Array.from(new Set(user.userRoles.map((ur) => ur.role.name)));
     const isRoot = roles.includes(SystemRole.ROOT);
 
     let permissions: string[] = [];
@@ -234,6 +402,18 @@ export class UsersService {
       permissions = Array.from(permSet);
     }
 
+    const saved = assignmentsMap[user.id] || {};
+    const relWhIds = user.userRoles.map((ur) => ur.warehouse?.id).filter(Boolean) as string[];
+    const relPosIds = user.userRoles.map((ur) => ur.pos?.id).filter(Boolean) as string[];
+    const warehouseIds = Array.from(new Set([...(saved.warehouseIds || []), ...relWhIds]));
+    const cashRegisterIds = Array.from(new Set(saved.cashRegisterIds || []));
+    const posIds = Array.from(new Set([...(saved.posIds || []), ...(cashRegisterIds.length === 0 ? relPosIds : [])]));
+    const warehouseById = new Map(warehousesList.map((w) => [w.id, w]));
+    const posById = new Map(posList.map((p) => [p.id, p]));
+    const regById = new Map(
+      registersList.map((r) => [r.id, { id: r.id, name: r.name, posId: r.posId, posName: r.pos?.name || '' }]),
+    );
+
     return {
       id: user.id,
       email: user.email,
@@ -255,11 +435,17 @@ export class UsersService {
         warehouse: ur.warehouse,
         pos: ur.pos,
       })),
+      warehouseIds,
+      posIds,
+      cashRegisterIds,
+      assignedWarehouses: warehouseIds.map((wid) => warehouseById.get(wid)).filter(Boolean),
+      assignedShowrooms: posIds.map((pid) => posById.get(pid)).filter(Boolean),
+      assignedCashRegisters: cashRegisterIds.map((cid) => regById.get(cid)).filter(Boolean),
     };
   }
 
   /**
-   * Create a new user with assigned roles
+   * Create a new user with assigned roles and location assignments
    */
   async create(createUserDto: CreateUserDto, currentUserId?: string) {
     const email = createUserDto.email.toLowerCase();
@@ -281,7 +467,6 @@ export class UsersService {
 
     const passwordHash = await argon2.hash(createUserDto.password);
 
-    // Default to CLIENT role if no roles provided
     let rolesToAssign = createUserDto.roleIds || [];
     if (rolesToAssign.length === 0) {
       const clientRole = await this.prisma.role.findUnique({
@@ -291,6 +476,9 @@ export class UsersService {
         rolesToAssign = [clientRole.id];
       }
     }
+
+    const { warehouseIds, posIds, directPosIds, cashRegisterIds } =
+      await this.resolveRelationalLocations(createUserDto);
 
     const newUser = await this.prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
@@ -305,30 +493,34 @@ export class UsersService {
         },
       });
 
-      for (const roleId of rolesToAssign) {
-        await tx.userRole.create({
-          data: {
-            userId: created.id,
-            roleId,
-            warehouseId: createUserDto.warehouseId || null,
-            posId: createUserDto.posId || null,
-            assignedBy: currentUserId || null,
-          },
-        });
-      }
+      await this.insertRoleLocations(
+        tx,
+        created.id,
+        rolesToAssign,
+        warehouseIds,
+        posIds,
+        currentUserId,
+      );
 
       return created;
     });
+
+    await this.saveUserAssignments(
+      newUser.id,
+      { warehouseIds, posIds: directPosIds, cashRegisterIds },
+      currentUserId,
+    );
 
     return this.findById(newUser.id);
   }
 
   /**
-   * Update an existing user with strict ROOT protection
+   * Update an existing user with strict ROOT protection and multi-assignments
    */
   async update(id: string, updateUserDto: UpdateUserDto, currentUserId?: string) {
     const user = await this.prisma.user.findFirst({
       where: { id, deletedAt: null },
+      include: { userRoles: { select: { roleId: true } } },
     });
 
     if (!user) {
@@ -337,7 +529,6 @@ export class UsersService {
 
     const isTargetRoot = await this.isUserRoot(id);
 
-    // HARD-CODED ROOT PROTECTION 1: Cannot disable or demote ROOT user
     if (isTargetRoot) {
       if (updateUserDto.isActive === false) {
         throw new ForbiddenException(
@@ -356,7 +547,6 @@ export class UsersService {
       }
     }
 
-    // HARD-CODED ROOT PROTECTION 2: Cannot assign ROOT role to any other account
     if (updateUserDto.roleIds && (await this.containsRootRole(updateUserDto.roleIds))) {
       if (!isTargetRoot) {
         throw new ForbiddenException(
@@ -365,7 +555,6 @@ export class UsersService {
       }
     }
 
-    // Email collision check if changing email
     if (updateUserDto.email && updateUserDto.email.toLowerCase() !== user.email) {
       const emailTaken = await this.prisma.user.findUnique({
         where: { email: updateUserDto.email.toLowerCase() },
@@ -379,6 +568,22 @@ export class UsersService {
       updateUserDto.password && updateUserDto.password.trim().length > 0
         ? await argon2.hash(updateUserDto.password.trim())
         : undefined;
+
+    const hasAssignmentPayload =
+      updateUserDto.warehouseIds !== undefined ||
+      updateUserDto.warehouseId !== undefined ||
+      updateUserDto.posIds !== undefined ||
+      updateUserDto.posId !== undefined ||
+      updateUserDto.cashRegisterIds !== undefined;
+
+    const resolvedLocations = hasAssignmentPayload
+      ? await this.resolveRelationalLocations(updateUserDto)
+      : null;
+
+    const effectiveRoleIds =
+      updateUserDto.roleIds && updateUserDto.roleIds.length > 0
+        ? updateUserDto.roleIds
+        : Array.from(new Set(user.userRoles.map((ur) => ur.roleId)));
 
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
@@ -401,25 +606,45 @@ export class UsersService {
         });
       }
 
-      if (updateUserDto.roleIds && !isTargetRoot) {
-        // Delete previous non-ROOT user roles
+      if ((updateUserDto.roleIds || resolvedLocations) && !isTargetRoot) {
+        const prevAssignments = (await this.loadAssignmentsMap())[id] || {};
+        const locs = resolvedLocations || {
+          warehouseIds: prevAssignments.warehouseIds || [],
+          posIds: prevAssignments.posIds || [],
+          directPosIds: prevAssignments.posIds || [],
+          cashRegisterIds: prevAssignments.cashRegisterIds || [],
+        };
+
         await tx.userRole.deleteMany({
           where: { userId: id },
         });
 
-        for (const roleId of updateUserDto.roleIds) {
-          await tx.userRole.create({
-            data: {
-              userId: id,
-              roleId,
-              warehouseId: updateUserDto.warehouseId || null,
-              posId: updateUserDto.posId || null,
-              assignedBy: currentUserId || null,
-            },
-          });
-        }
+        await this.insertRoleLocations(
+          tx,
+          id,
+          effectiveRoleIds,
+          locs.warehouseIds,
+          locs.posIds,
+          currentUserId,
+        );
       }
     });
+
+    if (resolvedLocations && !isTargetRoot) {
+      await this.saveUserAssignments(
+        id,
+        {
+          warehouseIds: resolvedLocations.warehouseIds,
+          posIds: resolvedLocations.directPosIds,
+          cashRegisterIds: resolvedLocations.cashRegisterIds,
+        },
+        currentUserId,
+      );
+    }
+
+    if (nextPasswordHash || updateUserDto.roleIds || updateUserDto.isActive === false) {
+      invalidateUserSessionCache(id);
+    }
 
     return this.findById(id);
   }
@@ -465,6 +690,8 @@ export class UsersService {
       });
     });
 
+    invalidateUserSessionCache(id);
+
     return {
       success: true,
       message: 'Utilisateur supprimé avec succès',
@@ -503,14 +730,17 @@ export class UsersService {
 
     // If deactivated, revoke all active sessions immediately
     if (!newActiveState) {
-      await this.prisma.session.updateMany({
-        where: { userId: id },
-        data: { isActive: false },
-      });
-      await this.prisma.refreshToken.updateMany({
-        where: { userId: id },
-        data: { isRevoked: true },
-      });
+      await Promise.all([
+        this.prisma.session.updateMany({
+          where: { userId: id },
+          data: { isActive: false },
+        }),
+        this.prisma.refreshToken.updateMany({
+          where: { userId: id },
+          data: { isRevoked: true },
+        }),
+      ]);
+      invalidateUserSessionCache(id);
     }
 
     return {
@@ -635,6 +865,8 @@ export class UsersService {
         data: { isRevoked: true },
       });
     });
+
+    invalidateUserSessionCache(id);
 
     return {
       success: true,

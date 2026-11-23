@@ -251,15 +251,34 @@ export class StorefrontCmsService {
     }
   }
 
+  private defaultsSnapshotCache: any = null;
+  private publicConfigCache: { value: any; expiresAt: number } | null = null;
+  private sysConfigCache = new Map<string, { value: any; expiresAt: number }>();
+
+  private invalidateCaches(key?: string) {
+    this.publicConfigCache = null;
+    if (key) {
+      this.sysConfigCache.delete(key);
+    } else {
+      this.sysConfigCache.clear();
+    }
+  }
+
   private async upsertSetting(key: string, value: string, group: string, updatedBy?: string) {
-    return this.prisma.settings.upsert({
+    const res = await this.prisma.settings.upsert({
       where: { key },
       update: { value, group, updatedBy: updatedBy || 'ROOT' },
       create: { key, value, group, isSecret: false, updatedBy: updatedBy || 'ROOT' },
     });
+    const sysKey = key.startsWith('sys.') ? key.slice(4) : undefined;
+    this.invalidateCaches(sysKey);
+    return res;
   }
 
   private getDefaultsSnapshot(): any {
+    if (this.defaultsSnapshotCache) {
+      return this.defaultsSnapshotCache;
+    }
     const candidates = [
       path.join(__dirname, 'cms-defaults.json'),
       path.resolve(process.cwd(), 'src', 'modules', 'storefront-cms', 'cms-defaults.json'),
@@ -267,13 +286,14 @@ export class StorefrontCmsService {
     for (const p of candidates) {
       if (fs.existsSync(p)) {
         try {
-          return JSON.parse(fs.readFileSync(p, 'utf8'));
+          this.defaultsSnapshotCache = JSON.parse(fs.readFileSync(p, 'utf8'));
+          return this.defaultsSnapshotCache;
         } catch {
           // ignore parse error
         }
       }
     }
-    return {
+    this.defaultsSnapshotCache = {
       identity: { ...ROYAL_CONTACT_INFO, appName: 'Royal', logoUrl: '/images/royal-logo.jpg', faviconUrl: '/icon.png' },
       theme: DEFAULT_THEME,
       header: DEFAULT_HEADER,
@@ -281,6 +301,7 @@ export class StorefrontCmsService {
       views: DEFAULT_VIEWS,
       heroSlides: [],
     };
+    return this.defaultsSnapshotCache;
   }
 
   private sanitizeHeroSlides(raw: any, fallback: any[]): any[] {
@@ -364,28 +385,39 @@ export class StorefrontCmsService {
   }
 
   async getPublicConfig() {
+    if (this.publicConfigCache && Date.now() < this.publicConfigCache.expiresAt) {
+      return this.publicConfigCache.value;
+    }
+
     const snap = this.getDefaultsSnapshot();
-    const settings = await this.prisma.settings.findMany({
-      where: {
-        key: {
-          in: [
-            'shipping.free_threshold',
-            'shipping.standard_fee',
-            'branding.app_name',
-            'branding.app_logo_url',
-            'branding.favicon_url',
-            'cms.identity',
-            'cms.theme',
-            'cms.header',
-            'cms.footer',
-            'cms.views',
-            'cms.heroSlides',
-            'cms.testimonials',
-            'sys.translations',
-          ],
+    const [settings, activeShowrooms] = await Promise.all([
+      this.prisma.settings.findMany({
+        where: {
+          key: {
+            in: [
+              'shipping.free_threshold',
+              'shipping.standard_fee',
+              'branding.app_name',
+              'branding.app_logo_url',
+              'branding.favicon_url',
+              'cms.identity',
+              'cms.theme',
+              'cms.header',
+              'cms.footer',
+              'cms.views',
+              'cms.heroSlides',
+              'cms.testimonials',
+              'sys.translations',
+            ],
+          },
         },
-      },
-    });
+      }),
+      this.prisma.pointOfSale.findMany({
+        where: { isActive: true },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, name: true, code: true, address: true, phone: true },
+      }),
+    ]);
     const map = new Map(settings.map((s) => [s.key, s.value]));
 
     const identity = this.parseJsonSetting(map.get('cms.identity'), {
@@ -416,13 +448,8 @@ export class StorefrontCmsService {
     const heroSlides = this.sanitizeHeroSlides(rawHeroSlides, snap.heroSlides || []);
     const testimonials = this.parseJsonSetting<any[]>(map.get('cms.testimonials'), DEFAULT_TESTIMONIALS);
     const translations = this.parseJsonSetting<any>(map.get('sys.translations'), null);
-    const activeShowrooms = await this.prisma.pointOfSale.findMany({
-      where: { isActive: true },
-      orderBy: { createdAt: 'asc' },
-      select: { id: true, name: true, code: true, address: true, phone: true },
-    });
 
-    return {
+    const payload = {
       appName: identity.appName || 'Royal',
       logoUrl: identity.logoUrl || '/images/royal-logo.jpg',
       faviconUrl: identity.faviconUrl || '/icon.png',
@@ -461,6 +488,8 @@ export class StorefrontCmsService {
         facebook: identity.facebook || ROYAL_CONTACT_INFO.facebook,
       },
     };
+    this.publicConfigCache = { value: payload, expiresAt: Date.now() + 5000 };
+    return payload;
   }
 
   async updateShippingConfig(dto: UpdateShippingConfigDto, updatedBy?: string) {
@@ -589,10 +618,29 @@ export class StorefrontCmsService {
     return created;
   }
 
-  async listContacts() {
+  async listContacts(limit?: number) {
+    if (limit && limit > 0) {
+      const [items, unreadCount, totalAll] = await Promise.all([
+        this.prisma.contactSubmission.findMany({
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+        }),
+        this.prisma.contactSubmission.count({ where: { isRead: false } }),
+        this.prisma.contactSubmission.count(),
+      ]);
+      return { items, unreadCount, totalAll };
+    }
     return this.prisma.contactSubmission.findMany({
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  async markAllContactsRead() {
+    const res = await this.prisma.contactSubmission.updateMany({
+      where: { isRead: false },
+      data: { isRead: true },
+    });
+    return { success: true, count: res.count };
   }
 
   async updateContact(id: string, dto: UpdateContactDto) {
@@ -1585,11 +1633,6 @@ export class StorefrontCmsService {
   }
 
   async listNotifications(_userId: string, query?: any) {
-    const rows = await this.prisma.notification.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
-    const allMapped = rows.map((n) => this.mapDashboardNotification(n));
-
     const wantsPagination =
       query &&
       (query.limit !== undefined ||
@@ -1597,13 +1640,12 @@ export class StorefrontCmsService {
         query.paginated === 'true');
 
     if (!wantsPagination) {
-      return allMapped;
+      const rows = await this.prisma.notification.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      });
+      return rows.map((n) => this.mapDashboardNotification(n));
     }
-
-    const totalAll = allMapped.length;
-    const unreadCount = allMapped.filter((n) => !n.isRead).length;
-    const readCount = totalAll - unreadCount;
-    const alertCount = allMapped.filter((n) => n.type === 'ALERT').length;
 
     const searchQ = String(query?.search || '').trim().toLowerCase();
     const statusFilter = String(query?.status || 'ALL').toUpperCase();
@@ -1613,6 +1655,70 @@ export class StorefrontCmsService {
     const endDate = query?.endDate ? new Date(String(query.endDate)) : null;
     if (startDate && !String(query.startDate).includes('T')) startDate.setHours(0, 0, 0, 0);
     if (endDate && !String(query.endDate).includes('T')) endDate.setHours(23, 59, 59, 999);
+
+    const limit = Math.max(1, Number(query?.limit ?? 10));
+    const offset = Math.max(0, Number(query?.offset ?? 0));
+
+    // Fast SQL path when only status filter or unfiltered feed is requested (e.g., navbar popover & infinite scroll)
+    const isSimpleQuery =
+      !searchQ &&
+      typeFilter === 'ALL' &&
+      channelFilter === 'ALL' &&
+      !startDate &&
+      !endDate &&
+      ['ALL', 'READ', 'UNREAD'].includes(statusFilter);
+
+    if (isSimpleQuery) {
+      const filteredWhere: any =
+        statusFilter === 'UNREAD'
+          ? { isRead: false }
+          : statusFilter === 'READ'
+          ? { isRead: true }
+          : {};
+
+      const [rows, filteredCount, totalAll, unreadCount, alertCount] = await Promise.all([
+        this.prisma.notification.findMany({
+          where: filteredWhere,
+          orderBy: { createdAt: 'desc' },
+          skip: offset,
+          take: limit,
+        }),
+        this.prisma.notification.count({ where: filteredWhere }),
+        this.prisma.notification.count(),
+        this.prisma.notification.count({ where: { isRead: false } }),
+        this.prisma.notification.count({
+          where: {
+            OR: [
+              { type: 'LOW_STOCK' },
+              { metadata: { path: ['severity'], equals: 'ALERT' } },
+            ],
+          },
+        }),
+      ]);
+
+      const items = rows.map((n) => this.mapDashboardNotification(n));
+      return {
+        items,
+        data: items,
+        total: filteredCount,
+        totalAll,
+        unreadCount,
+        readCount: totalAll - unreadCount,
+        alertCount,
+        hasMore: offset + items.length < filteredCount,
+        offset,
+        limit,
+      };
+    }
+
+    const rows = await this.prisma.notification.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    const allMapped = rows.map((n) => this.mapDashboardNotification(n));
+    const totalAll = allMapped.length;
+    const unreadCount = allMapped.filter((n) => !n.isRead).length;
+    const readCount = totalAll - unreadCount;
+    const alertCount = allMapped.filter((n) => n.type === 'ALERT').length;
 
     const filtered = allMapped.filter((item) => {
       if (searchQ) {
@@ -1631,8 +1737,6 @@ export class StorefrontCmsService {
       return true;
     });
 
-    const limit = Math.max(1, Number(query?.limit ?? 10));
-    const offset = Math.max(0, Number(query?.offset ?? 0));
     const items = filtered.slice(offset, offset + limit);
 
     return {
@@ -4050,20 +4154,20 @@ export class StorefrontCmsService {
         { key: '/dashboard/community/messages', label: 'Support (Staff)', section: 'Communauté', visibility: 'PUBLIC' },
         { key: '/account/messages', label: 'Support (Client)', section: 'Communauté', visibility: 'PUBLIC' },
         { key: '/dashboard/community/contacts', label: 'Contact', section: 'Communauté', visibility: 'PUBLIC' },
-        // Utilisateurs
+        // Utilisateurs (nouvelles vues créées privées par défaut — pilotables par ROOT)
         { key: '/dashboard/section/users', label: "Vue d'ensemble — Utilisateurs", section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
-        { key: '/dashboard/users', label: 'Tous les utilisateurs (Annuaire)', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
+        { key: '/dashboard/users', label: 'Tous les utilisateurs (Annuaire)', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/root/superadmins', label: 'Super Admin', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
-        { key: '/dashboard/users/admins', label: 'Administrateurs', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
+        { key: '/dashboard/users/admins', label: 'Administrateurs', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/users/website-managers', label: 'Website Manager', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/magasiniers', label: 'Magasiniers', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/caissiers', label: 'Caissiers', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/vendeurs', label: 'Vendeurs', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/financiers', label: 'Financiers', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/commercials', label: 'Commercials', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
-        { key: '/dashboard/users/delivery-managers', label: 'Responsables Livraison', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
-        { key: '/dashboard/users/delivery-agents', label: 'Livreurs', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
-        { key: '/dashboard/users/clients', label: 'Clients (Comptes RBAC)', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
+        { key: '/dashboard/users/delivery-managers', label: 'Responsables Livraison', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
+        { key: '/dashboard/users/delivery-agents', label: 'Livreurs', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
+        { key: '/dashboard/users/clients', label: 'Clients (Comptes RBAC)', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         // Catalogue
         { key: '/dashboard/brands', label: 'Marques', section: 'Catalogue', visibility: 'PUBLIC' },
         { key: '/dashboard/categories', label: 'Catégories', section: 'Catalogue', visibility: 'PUBLIC' },
@@ -5007,24 +5111,31 @@ export class StorefrontCmsService {
     if (!allowed.includes(key)) {
       throw new BadRequestException('Clé de configuration invalide.');
     }
+    const cacheableKeys = new Set(['visibility', 'translations', 'marketingPixels']);
+    if (cacheableKeys.has(key)) {
+      const cached = this.sysConfigCache.get(key);
+      if (cached && Date.now() < cached.expiresAt) {
+        return cached.value;
+      }
+    }
     const row = await this.prisma.settings.findUnique({ where: { key: `sys.${key}` } });
     const fallback = this.getExtendedSysConfigDefault(key) ?? this.getDefaultSysConfig(key);
     const parsed = this.parseJsonSetting(row?.value, fallback);
+    let result: any;
     if ((key === 'prefixes' || key === 'printTemplates') && Array.isArray(fallback) && Array.isArray(parsed)) {
       const existingCodes = new Set(parsed.map((item: any) => item?.code).filter(Boolean));
       const merged = [...parsed, ...fallback.filter((def: any) => !existingCodes.has(def.code))];
-      return {
+      result = {
         key,
         value: merged,
         updatedAt: row?.updatedAt || null,
       };
-    }
-    if (key === 'visibility' && Array.isArray(fallback) && Array.isArray(parsed)) {
+    } else if (key === 'visibility' && Array.isArray(fallback) && Array.isArray(parsed)) {
       const savedMap = new Map<string, any>();
       parsed.forEach((item: any) => {
         if (item?.key) savedMap.set(item.key, item);
       });
-      return {
+      result = {
         key,
         value: fallback.map((def: any) => {
           const saved = savedMap.get(def.key);
@@ -5042,12 +5153,17 @@ export class StorefrontCmsService {
         }),
         updatedAt: row?.updatedAt || null,
       };
+    } else {
+      result = {
+        key,
+        value: parsed,
+        updatedAt: row?.updatedAt || null,
+      };
     }
-    return {
-      key,
-      value: parsed,
-      updatedAt: row?.updatedAt || null,
-    };
+    if (cacheableKeys.has(key)) {
+      this.sysConfigCache.set(key, { value: result, expiresAt: Date.now() + 15000 });
+    }
+    return result;
   }
 
   async updateSysConfig(key: string, value: any, updatedBy?: string) {
