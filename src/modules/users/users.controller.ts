@@ -109,4 +109,21 @@ export class UsersController {
   ) {
     return this.usersService.resetPassword(id, currentUserId);
   }
+
+  @Patch(':id/email-verification')
+  @Permissions('users.update')
+  @ApiOperation({ summary: 'Confirmer ou révoquer manuellement la vérification e-mail d’un utilisateur' })
+  async setEmailVerification(
+    @Param('id') id: string,
+    @Body('isEmailVerified') isEmailVerified?: boolean,
+  ) {
+    return this.usersService.setEmailVerification(id, isEmailVerified);
+  }
+
+  @Post(':id/send-verification-code')
+  @Permissions('users.update')
+  @ApiOperation({ summary: 'Envoyer un nouveau code OTP de vérification e-mail via SMTP' })
+  async sendVerificationCode(@Param('id') id: string) {
+    return this.usersService.adminSendVerificationCode(id);
+  }
 }

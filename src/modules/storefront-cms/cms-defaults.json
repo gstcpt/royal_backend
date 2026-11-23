@@ -150,7 +150,7 @@
       "promotionsSubtitle": "Profitez de remises immédiates et de prix promo sur nos appareils sélectionnés."
     },
     "articles": {
-      "defaultColumns": "4",
+      "defaultColumns": "3",
       "defaultItemsPerPage": 24,
       "cardImageHeightPx": 260,
       "showCompareButton": true,
@@ -189,6 +189,7 @@
       "showSearch": true
     },
     "showrooms": {
+      "enabled": false,
       "layoutStyle": "grid",
       "showMap": true,
       "showHours": true,

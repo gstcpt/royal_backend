@@ -221,6 +221,7 @@ export class UsersService {
         FINANCIER: ['ACCOUNTANT'],
         ACCOUNTANT: ['ACCOUNTANT'],
         COMMERCIAL: ['COMMERCIAL'],
+        MARKETING: ['MARKETING'],
         DELIVERY_MANAGER: ['DELIVERY_MANAGER'],
         DELIVERY_AGENT: ['DELIVERY_AGENT'],
         CLIENT: ['CLIENT'],
@@ -874,6 +875,113 @@ export class UsersService {
       email: user.email,
       emailSent: true,
       message: `Nouveau mot de passe généré et envoyé par e-mail à ${user.email}.`,
+    };
+  }
+
+  /**
+   * Manually verify or unverify a user's email address from the admin console.
+   */
+  async setEmailVerification(id: string, isEmailVerified?: boolean) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!user) {
+      throw new NotFoundException('Utilisateur introuvable');
+    }
+
+    const nextVerified =
+      isEmailVerified !== undefined ? Boolean(isEmailVerified) : !user.isEmailVerified;
+
+    if (!nextVerified && (await this.isUserRoot(id))) {
+      throw new ForbiddenException(
+        'Le compte ROOT doit rester vérifié en permanence.',
+      );
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        isEmailVerified: nextVerified,
+        ...(nextVerified ? { emailVerifyToken: null, emailVerifyExp: null } : {}),
+      },
+      select: { id: true, email: true, isEmailVerified: true },
+    });
+
+    invalidateUserSessionCache(id);
+
+    return {
+      success: true,
+      id: updated.id,
+      email: updated.email,
+      isEmailVerified: updated.isEmailVerified,
+      message: updated.isEmailVerified
+        ? `E-mail vérifié pour ${updated.email}.`
+        : `Vérification e-mail révoquée pour ${updated.email}.`,
+    };
+  }
+
+  /**
+   * Generates a 6-digit OTP verification code and sends it via SMTP to the user.
+   */
+  async adminSendVerificationCode(id: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!user) {
+      throw new NotFoundException('Utilisateur introuvable');
+    }
+
+    const smtpRow = await this.prisma.settings.findUnique({ where: { key: 'sys.smtp' } });
+    let smtpCfg: any = {};
+    try {
+      smtpCfg = smtpRow?.value ? JSON.parse(smtpRow.value) : {};
+    } catch {
+      smtpCfg = {};
+    }
+
+    if (!smtpCfg?.host || !smtpCfg?.user || !smtpCfg?.password) {
+      throw new BadRequestException(
+        'Configuration SMTP manquante dans Système > Paramètres > SMTP. Impossible d’envoyer le code de vérification.',
+      );
+    }
+
+    const otpCode = String(crypto.randomInt(100000, 999999));
+    const tokenHash = crypto.createHash('sha256').update(otpCode).digest('hex');
+
+    await sendSmtpMailWithAttachments(smtpCfg, {
+      to: user.email,
+      subject: 'Royal — Code de vérification de votre adresse e-mail',
+      htmlBody: `
+        <div style="font-family:Poppins,Arial,sans-serif;max-width:560px;margin:auto;border:1px solid #E6E1D6;border-radius:16px;padding:28px;background:#FFFFFF;color:#1D232E;">
+          <div style="border-bottom:3px solid #C59B27;padding-bottom:12px;margin-bottom:20px;">
+            <h2 style="margin:0;color:#1D232E;font-size:20px;">Royal — Électro de Maison</h2>
+            <p style="margin:4px 0 0;color:#9A7414;font-size:12px;font-weight:700;">Vérification de votre adresse e-mail</p>
+          </div>
+          <p style="font-size:14px;">Bonjour <strong>${user.firstName} ${user.lastName}</strong>,</p>
+          <p style="font-size:13px;line-height:1.6;">
+            Utilisez le code de vérification à 6 chiffres ci-dessous pour confirmer votre adresse e-mail :
+          </p>
+          <div style="margin:20px 0;padding:16px;background:#FBF6E8;border:1px solid #E6D6A6;border-radius:12px;text-align:center;">
+            <span style="font-family:monospace;font-size:28px;font-weight:900;letter-spacing:6px;color:#1D232E;">${otpCode}</span>
+          </div>
+          <p style="font-size:12px;color:#64748B;">Ce code est valable pendant 15 minutes.</p>
+        </div>
+      `,
+    });
+
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        emailVerifyToken: tokenHash,
+        emailVerifyExp: new Date(Date.now() + 15 * 60 * 1000),
+      },
+    });
+
+    return {
+      success: true,
+      sent: true,
+      email: user.email,
+      message: `Code de vérification à 6 chiffres envoyé à ${user.email}.`,
     };
   }
 }

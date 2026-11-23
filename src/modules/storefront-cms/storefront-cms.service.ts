@@ -137,7 +137,7 @@ const DEFAULT_VIEWS = {
     showNewsletter: true,
   },
   articles: {
-    defaultColumns: '4',
+    defaultColumns: '3',
     defaultItemsPerPage: 24,
     cardImageHeightPx: 260,
     showCompareButton: true,
@@ -177,7 +177,7 @@ const DEFAULT_VIEWS = {
     showSearch: true,
   },
   showrooms: {
-    enabled: true,
+    enabled: false,
     layoutStyle: 'grid',
     showMap: true,
     showHours: true,
@@ -2118,6 +2118,19 @@ export class StorefrontCmsService {
       reactions[r.productId] = r.reaction || 'LIKE';
     }
     return { reactions };
+  }
+
+  async getMyReviews(userId: string) {
+    const { customer } = await this.resolveOrCreateCustomer(userId);
+    const rows = await this.prisma.review.findMany({
+      where: { customerId: customer.id },
+      select: { productId: true, rating: true, title: true, body: true },
+    });
+    const reviews: Record<string, { rating: number; title?: string | null; body: string }> = {};
+    for (const r of rows) {
+      reviews[r.productId] = { rating: r.rating, title: r.title, body: r.body || '' };
+    }
+    return { reviews };
   }
 
   async getMyInteractions(userId: string) {
@@ -4165,6 +4178,7 @@ export class StorefrontCmsService {
         { key: '/dashboard/users/vendeurs', label: 'Vendeurs', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/financiers', label: 'Financiers', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/commercials', label: 'Commercials', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
+        { key: '/dashboard/users/marketing', label: 'Marketing', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/users/delivery-managers', label: 'Responsables Livraison', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/users/delivery-agents', label: 'Livreurs', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/users/clients', label: 'Clients (Comptes RBAC)', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },

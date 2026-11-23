@@ -426,6 +426,14 @@ export class StorefrontCmsController {
     return this.service.getMyReactions(userId);
   }
 
+  @Get('my-reviews')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Récupérer les avis laissés par le client connecté' })
+  getMyReviews(@CurrentUser('id') userId: string) {
+    return this.service.getMyReviews(userId);
+  }
+
   @Get('my-notifications')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
