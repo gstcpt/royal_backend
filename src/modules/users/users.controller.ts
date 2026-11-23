@@ -98,4 +98,15 @@ export class UsersController {
   ) {
     return this.usersService.toggleStatus(id, isActive);
   }
+
+  @Post(':id/reset-password')
+  @Permissions('users.update')
+  @ApiOperation({ summary: 'Régénérer un mot de passe sécurisé et l’envoyer par e-mail SMTP à l’utilisateur' })
+  @ApiResponse({ status: 201, description: 'Nouveau mot de passe généré et envoyé par e-mail' })
+  async resetPassword(
+    @Param('id') id: string,
+    @CurrentUser('id') currentUserId: string,
+  ) {
+    return this.usersService.resetPassword(id, currentUserId);
+  }
 }

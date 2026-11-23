@@ -31,6 +31,12 @@ export class UpdateUserDto {
   @IsOptional()
   phone?: string;
 
+  @ApiPropertyOptional({ example: 'NouveauMotDePasse2026!', description: 'Optionnel — min. 8 caractères si modification' })
+  @IsString()
+  @MinLength(8)
+  @IsOptional()
+  password?: string;
+
   @ApiPropertyOptional({ example: 'https://avatar.url/avatar.png' })
   @IsString()
   @IsOptional()
