@@ -10,7 +10,13 @@ import * as net from 'net';
 import { PrismaService } from '../../database/prisma.service';
 import { storeMediaAsset } from './utils/media-storage.helper';
 import { buildDocumentPdfBuffer, sendSmtpMailWithAttachments } from './utils/pdf-smtp.helper';
-import { generateAiCompletion, extractJsonBlock } from './utils/ai-provider.helper';
+import {
+  generateAiCompletion,
+  extractJsonBlock,
+  listGroqChatModels,
+  GEMINI_DEFAULT_MODELS,
+  GROQ_PREFERRED_CHAT_MODELS,
+} from './utils/ai-provider.helper';
 import {
   CreateContactDto,
   CreateProductReviewDto,
@@ -4735,7 +4741,7 @@ export class StorefrontCmsService {
         geminiApiKey: '',
         geminiModel: 'gemini-2.5-flash',
         groqApiKey: '',
-        groqModel: 'llama-3.3-70b-versatile',
+        groqModel: 'openai/gpt-oss-120b',
         enableCatalogCopy: true,
         enableAnalyticsInsights: true,
         defaultTone: 'Luxe éditorial sobre, précis et orienté conversion (Tunisie, TND)',
@@ -5665,6 +5671,7 @@ export class StorefrontCmsService {
         ok: true,
         provider: res.provider,
         model: res.model,
+        fallbackFrom: res.fallbackFrom,
         reply: res.text,
       };
     }
@@ -5702,6 +5709,23 @@ export class StorefrontCmsService {
       provider: res.provider,
       model: res.model,
       data: parsed,
+    };
+  }
+
+  async listAiProviderModels(provider?: string, overrideApiKey?: string) {
+    const target = String(provider || 'GROQ').toUpperCase();
+    if (target === 'GEMINI') {
+      return { provider: 'GEMINI', models: GEMINI_DEFAULT_MODELS };
+    }
+    const saved = ((await this.getSysConfig('aiProvider')).value || {}) as any;
+    const key = String(overrideApiKey || saved?.groqApiKey || '').trim();
+    if (!key) {
+      return { provider: 'GROQ', models: GROQ_PREFERRED_CHAT_MODELS };
+    }
+    const models = await listGroqChatModels(key);
+    return {
+      provider: 'GROQ',
+      models: models.length > 0 ? models : GROQ_PREFERRED_CHAT_MODELS,
     };
   }
 }

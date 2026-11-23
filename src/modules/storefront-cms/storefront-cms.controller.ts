@@ -819,6 +819,17 @@ export class StorefrontCmsController {
     return this.service.generateAiContent({ ...dto, mode: 'TEST' }, true);
   }
 
+  @Post('ai/models')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:update')
+  listAiModels(@Body() body: { provider?: string; apiKey?: string }, @Req() req: any) {
+    if (!this.isRootRequest(req)) {
+      throw new ForbiddenException('Seul le compte ROOT peut consulter les modèles IA.');
+    }
+    return this.service.listAiProviderModels(body?.provider, body?.apiKey);
+  }
+
   @Get('pos-printers')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
