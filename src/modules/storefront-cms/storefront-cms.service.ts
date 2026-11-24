@@ -12,6 +12,10 @@ import { storeMediaAsset } from './utils/media-storage.helper';
 import { buildDocumentPdfBuffer, sendSmtpMailWithAttachments } from './utils/pdf-smtp.helper';
 import {
   generateAiCompletion,
+  runResilientAiFailoverLoop,
+  AiProgressEvent,
+  AiQuotaExhaustedError,
+  AiProviderConfig,
   extractJsonBlock,
   listGroqChatModels,
   GEMINI_DEFAULT_MODELS,
@@ -138,7 +142,8 @@ const DEFAULT_VIEWS = {
   },
   articles: {
     defaultColumns: '3',
-    defaultItemsPerPage: 24,
+    defaultItemsPerPage: 12,
+    paginationMode: 'PAGINATION' as 'PAGINATION' | 'LOAD_MORE',
     cardImageHeightPx: 260,
     showCompareButton: true,
     showWishlistButton: true,
@@ -3154,6 +3159,45 @@ export class StorefrontCmsService {
     });
   }
 
+  async deleteShowroom(id: string) {
+    const existing = await this.prisma.pointOfSale.findUnique({
+      where: { id },
+      include: { cashRegisters: true },
+    });
+    if (!existing) {
+      throw new NotFoundException('Salle d’exposition introuvable.');
+    }
+    try {
+      await this.prisma.pointOfSale.delete({ where: { id } });
+      return { ok: true, deletedId: id };
+    } catch {
+      await this.prisma.pointOfSale.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      return { ok: true, archivedId: id, softDeactivated: true };
+    }
+  }
+
+  async bulkActionShowrooms(ids: string[], action: 'ACTIVATE' | 'DEACTIVATE' | 'DELETE') {
+    const cleanIds = Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
+    if (cleanIds.length === 0) return { ok: true, count: 0 };
+    if (action === 'DELETE') {
+      let count = 0;
+      for (const id of cleanIds) {
+        await this.deleteShowroom(id);
+        count++;
+      }
+      return { ok: true, action, count };
+    }
+    const isActive = action === 'ACTIVATE';
+    const res = await this.prisma.pointOfSale.updateMany({
+      where: { id: { in: cleanIds } },
+      data: { isActive },
+    });
+    return { ok: true, action, count: res.count };
+  }
+
   async getSectionDashboard(section: string) {
     const key = section.toLowerCase();
 
@@ -4767,6 +4811,12 @@ export class StorefrontCmsService {
         freeShippingThreshold: 300,
         defaultShippingFee: 12,
         lowStockDefaultAlert: 10,
+        canonicalBaseUrl: '',
+        forceHttps: false,
+        maintenanceMode: false,
+        maintenanceMessage:
+          'Notre boutique est momentanément en maintenance technique. Merci de votre patience.',
+        deliveryFleetEnabled: true,
       };
     }
     if (key === 'translations') {
@@ -4867,6 +4917,10 @@ export class StorefrontCmsService {
         groqModel: 'openai/gpt-oss-120b',
         enableCatalogCopy: true,
         enableAnalyticsInsights: true,
+        enableOverviewRecaps: true,
+        enableFormAutofill: true,
+        recapTargets: {},
+        formTargets: {},
         defaultTone: 'Luxe éditorial sobre, précis et orienté conversion (Tunisie, TND)',
       };
     }
@@ -5409,6 +5463,22 @@ export class StorefrontCmsService {
           }, {})
         : value;
     await this.upsertSetting(`sys.${key}`, JSON.stringify(normalizedValue), 'system', updatedBy);
+    if (
+      key === 'generalSettings' &&
+      normalizedValue &&
+      typeof normalizedValue === 'object' &&
+      typeof normalizedValue.canonicalBaseUrl === 'string'
+    ) {
+      const currentPixels = ((await this.getSysConfig('marketingPixels')).value || {}) as Record<string, any>;
+      if (currentPixels.canonicalBaseUrl !== normalizedValue.canonicalBaseUrl) {
+        await this.upsertSetting(
+          'sys.marketingPixels',
+          JSON.stringify({ ...currentPixels, canonicalBaseUrl: normalizedValue.canonicalBaseUrl }),
+          'system',
+          updatedBy,
+        );
+      }
+    }
     return this.getSysConfig(key);
   }
 
@@ -5960,9 +6030,368 @@ export class StorefrontCmsService {
     };
   }
 
+  private aiJobs = new Map<
+    string,
+    {
+      id: string;
+      status: 'RUNNING' | 'COMPLETED' | 'FAILED_QUOTA' | 'FAILED' | 'CANCELLED';
+      mode: string;
+      startedAt: number;
+      finishedAt?: number;
+      currentWorkerNumber: 1 | 2;
+      currentProvider: 'GEMINI' | 'GROQ';
+      currentModel: string;
+      currentPhase: string;
+      statusMessage: string;
+      worker1: { provider: 'GEMINI' | 'GROQ'; model: string; configured: boolean; quotaExhausted: boolean };
+      worker2: { provider: 'GEMINI' | 'GROQ'; model: string; configured: boolean; quotaExhausted: boolean };
+      steps: AiProgressEvent[];
+      result?: any;
+      error?: string;
+      quotaExhausted?: boolean;
+      abortController: AbortController;
+    }
+  >();
+
+  private cleanupOldAiJobs() {
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    for (const [id, job] of this.aiJobs.entries()) {
+      if ((job.finishedAt || job.startedAt) < cutoff) {
+        this.aiJobs.delete(id);
+      }
+    }
+  }
+
+  private assertAiModeAllowed(
+    cfg: any,
+    mode: string,
+    payload: Record<string, any> = {},
+    allowOverride = false,
+  ) {
+    if (mode !== 'TEST' && !cfg.enabled) {
+      throw new BadRequestException(
+        'Le module IA est désactivé. Demandez au compte ROOT de l’activer dans Système > Intelligence Artificielle.',
+      );
+    }
+    if (allowOverride || mode === 'TEST') return;
+
+    if (mode === 'SECTION_RECAP') {
+      if (cfg.enableOverviewRecaps === false) {
+        throw new BadRequestException('Les récaps IA des Vues d’Ensemble sont désactivés dans Système > IA.');
+      }
+      const target = String(payload?.sectionId || 'main').toLowerCase();
+      if (cfg.recapTargets && cfg.recapTargets[target] === false) {
+        throw new BadRequestException(`Le récap IA pour la vue "${target}" est désactivé dans Système > IA.`);
+      }
+    }
+
+    if (mode === 'FORM_AUTOFILL') {
+      if (cfg.enableFormAutofill === false) {
+        throw new BadRequestException('Le remplissage IA des formulaires est désactivé dans Système > IA.');
+      }
+      const target = String(payload?.formKey || 'generic').toLowerCase();
+      if (cfg.formTargets && cfg.formTargets[target] === false) {
+        throw new BadRequestException(`L’assistant IA pour le formulaire "${target}" est désactivé dans Système > IA.`);
+      }
+    }
+
+    if (mode === 'PRODUCT_COPY' && cfg.enableCatalogCopy === false && cfg.enableFormAutofill === false) {
+      throw new BadRequestException('La rédaction IA d’articles est désactivée dans Système > IA.');
+    }
+
+    if (mode === 'ANALYTICS_INSIGHT' && cfg.enableAnalyticsInsights === false && cfg.enableOverviewRecaps === false) {
+      throw new BadRequestException('Les conseils IA Analytics sont désactivés dans Système > IA.');
+    }
+  }
+
+  private buildAiPrompts(
+    mode: 'PRODUCT_COPY' | 'ANALYTICS_INSIGHT' | 'SECTION_RECAP' | 'FORM_AUTOFILL' | 'TEST',
+    payload: Record<string, any> = {},
+    cfg: any = {},
+  ): { systemPrompt: string; userPrompt: string } {
+    const tone = cfg.defaultTone || 'Luxe éditorial sobre, précis et orienté conversion (Tunisie, TND)';
+
+    if (mode === 'TEST') {
+      return {
+        systemPrompt:
+          'Tu es l’assistant technique de Royal Électro de Maison en Tunisie. Réponds en une phrase courte en français.',
+        userPrompt: 'Confirme que la connexion IA fonctionne correctement pour Royal.',
+      };
+    }
+
+    if (mode === 'PRODUCT_COPY') {
+      return {
+        systemPrompt: `Tu es un rédacteur e-commerce expert pour Royal Électro de Maison (Tunisie, devise TND). Ton: ${tone}. Retourne UNIQUEMENT un objet JSON valide (sans markdown) avec exactement ces clés: {"nameAr": string, "shortDescription": string, "description": string, "metaTitle": string, "metaDesc": string, "focusKeyword": string}.`,
+        userPrompt: `Produit: "${payload.name || 'Appareil'}", Catégorie: "${payload.category || 'Électroménager'}", Marque: "${payload.brand || 'Royal'}", Prix: "${payload.price || ''} TND". Contraintes: metaTitle <= 60 caractères, metaDesc 135-160 caractères, description riche (80-130 mots) en français, et nom commercial naturel en arabe dans nameAr.`,
+      };
+    }
+
+    if (mode === 'SECTION_RECAP') {
+      return {
+        systemPrompt: `Tu es un directeur général adjoint & analyste ERP/e-commerce expert pour Royal Électro de Maison (Tunisie, devise TND). Réponds UNIQUEMENT en JSON valide (sans markdown): {"headline": string, "executiveSummary": string, "highlights": [{"label": string, "insight": string}], "risks": [string], "recommendations": [{"title": string, "priority": "HAUTE"|"MOYENNE", "action": string}]}. Rédige en français clair, concret et chiffré.`,
+        userPrompt: `Section: "${payload.title || payload.sectionId || 'Tableau de bord'}" (id="${payload.sectionId || 'main'}"). Sous-titre: "${payload.subtitle || ''}". KPIs actuels JSON: ${JSON.stringify(payload.kpis || {})}. Métriques additionnelles: ${JSON.stringify(payload.summaryMetrics || {})}. Produis un récapitulatif exécutif complet (3 à 4 highlights, 2 points de vigilance max, 3 à 4 actions prioritaires).`,
+      };
+    }
+
+    if (mode === 'FORM_AUTOFILL') {
+      const fieldsList = Array.isArray(payload.fields) ? payload.fields : [];
+      return {
+        systemPrompt: `Tu es un assistant ERP intelligent pour Royal Électro de Maison (Tunisie, TND). Tu complètes des formulaires métier de gestion (articles, catégories, fournisseurs, clients, showrooms, coupons, témoignages, CMS, utilisateurs). Retourne UNIQUEMENT un objet JSON valide: {"values": Record<string, string | number>, "summary": string}. Règles strictes: (1) Ne retourne des clés que parmi field.key fournies, (2) respecte les options autorisées si le champ est un select, (3) pour les champs numériques/prix/taux retourne un nombre cohérent, (4) conserve le français professionnel de luxe tunisien.`,
+        userPrompt: `Formulaire "${payload.formTitle || payload.formKey || 'Formulaire'}" (contexte=${payload.formKey || 'generic'}, type=${payload.mode || 'create'}). Champs détectés: ${JSON.stringify(fieldsList)}. Valeurs déjà saisies: ${JSON.stringify(payload.currentValues || {})}. Complète intelligemment les champs pertinents en respectant les valeurs existantes comme contexte.`,
+      };
+    }
+
+    // ANALYTICS_INSIGHT
+    return {
+      systemPrompt:
+        'Tu es un directeur retail & e-commerce pour Royal Électro de Maison (Tunisie). Analyse les métriques et réponds UNIQUEMENT en JSON valide: {"headline": string, "summary": string, "recommendations": [{"title": string, "impact": "HAUT"|"MOYEN", "action": string}]}. Max 4 recommandations concrètes en français.',
+      userPrompt: `KPIs actuels: Vues=${payload.totalViews || 0}, Visiteurs=${payload.totalVisitors || 0}, Taux rebond=${payload.avgBounce || 0}%, Taux conversion=${payload.avgConversion || 0}%, Top pages=${JSON.stringify(payload.topPages || [])}.`,
+    };
+  }
+
+  private parseAiModeResponse(mode: string, text: string, meta: { provider: string; model: string; workerNumber: 1 | 2; fallbackFrom?: string }) {
+    if (mode === 'TEST') {
+      return {
+        ok: true,
+        provider: meta.provider,
+        model: meta.model,
+        workerNumber: meta.workerNumber,
+        fallbackFrom: meta.fallbackFrom,
+        reply: text,
+      };
+    }
+    const parsed = extractJsonBlock(text);
+    if (mode === 'PRODUCT_COPY') {
+      return {
+        ok: true,
+        provider: meta.provider,
+        model: meta.model,
+        workerNumber: meta.workerNumber,
+        fallbackFrom: meta.fallbackFrom,
+        data: parsed || { description: text },
+      };
+    }
+    if (mode === 'ANALYTICS_INSIGHT') {
+      return {
+        ok: true,
+        provider: meta.provider,
+        model: meta.model,
+        workerNumber: meta.workerNumber,
+        fallbackFrom: meta.fallbackFrom,
+        data: parsed || { headline: 'Analyse IA', summary: text, recommendations: [] },
+      };
+    }
+    if (mode === 'SECTION_RECAP') {
+      return {
+        ok: true,
+        provider: meta.provider,
+        model: meta.model,
+        workerNumber: meta.workerNumber,
+        fallbackFrom: meta.fallbackFrom,
+        data: parsed || {
+          headline: 'Synthèse IA',
+          executiveSummary: text,
+          highlights: [],
+          risks: [],
+          recommendations: [],
+        },
+      };
+    }
+    // FORM_AUTOFILL
+    return {
+      ok: true,
+      provider: meta.provider,
+      model: meta.model,
+      workerNumber: meta.workerNumber,
+      fallbackFrom: meta.fallbackFrom,
+      data: parsed || { values: {}, summary: text },
+    };
+  }
+
+  async getAiAvailability() {
+    const saved = ((await this.getSysConfig('aiProvider')).value || {}) as Partial<AiProviderConfig>;
+    const primaryProvider: 'GEMINI' | 'GROQ' = saved.provider === 'GROQ' ? 'GROQ' : 'GEMINI';
+    const secondaryProvider: 'GEMINI' | 'GROQ' = primaryProvider === 'GROQ' ? 'GEMINI' : 'GROQ';
+    const geminiConfigured = Boolean(String(saved.geminiApiKey || '').trim());
+    const groqConfigured = Boolean(String(saved.groqApiKey || '').trim());
+    const hasWorker1 = primaryProvider === 'GEMINI' ? geminiConfigured : groqConfigured;
+    const hasWorker2 = secondaryProvider === 'GEMINI' ? geminiConfigured : groqConfigured;
+    const primaryModel =
+      primaryProvider === 'GEMINI'
+        ? saved.geminiModel || GEMINI_DEFAULT_MODELS[0]
+        : saved.groqModel || GROQ_PREFERRED_CHAT_MODELS[0];
+    const secondaryModel =
+      secondaryProvider === 'GEMINI'
+        ? saved.geminiModel || GEMINI_DEFAULT_MODELS[0]
+        : saved.groqModel || GROQ_PREFERRED_CHAT_MODELS[0];
+
+    return {
+      enabled: Boolean(saved.enabled),
+      primaryProvider,
+      secondaryProvider,
+      primaryModel,
+      secondaryModel,
+      hasWorker1,
+      hasWorker2,
+      enableCatalogCopy: saved.enableCatalogCopy !== false,
+      enableAnalyticsInsights: saved.enableAnalyticsInsights !== false,
+      enableOverviewRecaps: saved.enableOverviewRecaps !== false,
+      enableFormAutofill: saved.enableFormAutofill !== false,
+      recapTargets: saved.recapTargets && typeof saved.recapTargets === 'object' ? saved.recapTargets : {},
+      formTargets: saved.formTargets && typeof saved.formTargets === 'object' ? saved.formTargets : {},
+    };
+  }
+
+  async startAiJob(
+    dto: {
+      mode: 'PRODUCT_COPY' | 'ANALYTICS_INSIGHT' | 'SECTION_RECAP' | 'FORM_AUTOFILL' | 'TEST';
+      payload?: Record<string, any>;
+      overrideConfig?: Record<string, any>;
+    },
+    allowOverride = false,
+  ) {
+    this.cleanupOldAiJobs();
+    const saved = ((await this.getSysConfig('aiProvider')).value || {}) as any;
+    const cfg = allowOverride && dto.overrideConfig ? { ...saved, ...dto.overrideConfig } : saved;
+    this.assertAiModeAllowed(cfg, dto.mode, dto.payload || {}, allowOverride);
+
+    const primaryProvider: 'GEMINI' | 'GROQ' = cfg.provider === 'GROQ' ? 'GROQ' : 'GEMINI';
+    const secondaryProvider: 'GEMINI' | 'GROQ' = primaryProvider === 'GROQ' ? 'GEMINI' : 'GROQ';
+    const geminiKey = String(cfg.geminiApiKey || '').trim();
+    const groqKey = String(cfg.groqApiKey || '').trim();
+    const w1Configured = primaryProvider === 'GEMINI' ? Boolean(geminiKey) : Boolean(groqKey);
+    const w2Configured = secondaryProvider === 'GEMINI' ? Boolean(geminiKey) : Boolean(groqKey);
+    if (!w1Configured && !w2Configured) {
+      throw new BadRequestException(
+        'Aucune clé API Gemini ou Groq n’est configurée dans Système > Intelligence Artificielle.',
+      );
+    }
+
+    const w1Model =
+      primaryProvider === 'GEMINI'
+        ? cfg.geminiModel || GEMINI_DEFAULT_MODELS[0]
+        : cfg.groqModel || GROQ_PREFERRED_CHAT_MODELS[0];
+    const w2Model =
+      secondaryProvider === 'GEMINI'
+        ? cfg.geminiModel || GEMINI_DEFAULT_MODELS[0]
+        : cfg.groqModel || GROQ_PREFERRED_CHAT_MODELS[0];
+
+    const jobId = `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const abortController = new AbortController();
+    const initialWorkerNumber: 1 | 2 = w1Configured ? 1 : 2;
+    const job = {
+      id: jobId,
+      status: 'RUNNING' as const,
+      mode: dto.mode,
+      startedAt: Date.now(),
+      currentWorkerNumber: initialWorkerNumber,
+      currentProvider: initialWorkerNumber === 1 ? primaryProvider : secondaryProvider,
+      currentModel: initialWorkerNumber === 1 ? w1Model : w2Model,
+      currentPhase: 'STARTING',
+      statusMessage: `Initialisation Worker ${initialWorkerNumber} (${initialWorkerNumber === 1 ? primaryProvider : secondaryProvider})...`,
+      worker1: { provider: primaryProvider, model: w1Model, configured: w1Configured, quotaExhausted: !w1Configured },
+      worker2: { provider: secondaryProvider, model: w2Model, configured: w2Configured, quotaExhausted: !w2Configured },
+      steps: [] as AiProgressEvent[],
+      abortController,
+    };
+    this.aiJobs.set(jobId, job as any);
+
+    const { systemPrompt, userPrompt } = this.buildAiPrompts(dto.mode, dto.payload || {}, cfg);
+
+    // Run resilient worker failover loop asynchronously
+    void runResilientAiFailoverLoop(cfg, systemPrompt, userPrompt, {
+      signal: abortController.signal,
+      maxAttempts: 24,
+      onProgress: (ev) => {
+        const currentJob = this.aiJobs.get(jobId);
+        if (!currentJob) return;
+        currentJob.currentWorkerNumber = ev.workerNumber;
+        currentJob.currentProvider = ev.provider;
+        currentJob.currentModel = ev.model;
+        currentJob.currentPhase = ev.phase;
+        currentJob.statusMessage = ev.message;
+        if (ev.phase === 'QUOTA_EXHAUSTED') {
+          if (ev.workerNumber === 1) currentJob.worker1.quotaExhausted = true;
+          else currentJob.worker2.quotaExhausted = true;
+        }
+        currentJob.steps.push(ev);
+        if (currentJob.steps.length > 40) {
+          currentJob.steps = currentJob.steps.slice(-40);
+        }
+      },
+    })
+      .then((res) => {
+        const currentJob = this.aiJobs.get(jobId);
+        if (!currentJob || currentJob.status === 'CANCELLED') return;
+        currentJob.status = 'COMPLETED';
+        currentJob.finishedAt = Date.now();
+        currentJob.currentPhase = 'COMPLETED';
+        currentJob.result = this.parseAiModeResponse(dto.mode, res.text, res);
+      })
+      .catch((err: any) => {
+        const currentJob = this.aiJobs.get(jobId);
+        if (!currentJob) return;
+        if (err?.message === 'ABORTED' || currentJob.status === 'CANCELLED') {
+          currentJob.status = 'CANCELLED';
+          currentJob.finishedAt = Date.now();
+          return;
+        }
+        const isQuota = err instanceof AiQuotaExhaustedError;
+        currentJob.status = isQuota ? 'FAILED_QUOTA' : 'FAILED';
+        currentJob.quotaExhausted = isQuota;
+        currentJob.finishedAt = Date.now();
+        currentJob.error =
+          err?.message || 'Les fournisseurs IA sont temporairement indisponibles.';
+      });
+
+    return {
+      jobId,
+      startedAt: job.startedAt,
+      worker1: job.worker1,
+      worker2: job.worker2,
+    };
+  }
+
+  getAiJobStatus(jobId: string) {
+    const job = this.aiJobs.get(jobId);
+    if (!job) {
+      throw new NotFoundException('Tâche IA introuvable ou expirée.');
+    }
+    return {
+      id: job.id,
+      status: job.status,
+      mode: job.mode,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+      elapsedMs: (job.finishedAt || Date.now()) - job.startedAt,
+      currentWorkerNumber: job.currentWorkerNumber,
+      currentProvider: job.currentProvider,
+      currentModel: job.currentModel,
+      currentPhase: job.currentPhase,
+      statusMessage: job.statusMessage,
+      worker1: job.worker1,
+      worker2: job.worker2,
+      steps: job.steps,
+      result: job.result,
+      error: job.error,
+      quotaExhausted: Boolean(job.quotaExhausted),
+    };
+  }
+
+  cancelAiJob(jobId: string) {
+    const job = this.aiJobs.get(jobId);
+    if (!job) return { ok: true, status: 'NOT_FOUND' };
+    job.status = 'CANCELLED';
+    job.finishedAt = Date.now();
+    job.currentPhase = 'CANCELLED';
+    job.statusMessage = 'Opération IA interrompue par l’utilisateur.';
+    job.abortController.abort();
+    return { ok: true, status: 'CANCELLED' };
+  }
+
   async generateAiContent(
     dto: {
-      mode: 'PRODUCT_COPY' | 'ANALYTICS_INSIGHT' | 'TEST';
+      mode: 'PRODUCT_COPY' | 'ANALYTICS_INSIGHT' | 'SECTION_RECAP' | 'FORM_AUTOFILL' | 'TEST';
       payload?: Record<string, any>;
       overrideConfig?: Record<string, any>;
     },
@@ -5970,62 +6399,11 @@ export class StorefrontCmsService {
   ) {
     const saved = ((await this.getSysConfig('aiProvider')).value || {}) as any;
     const cfg = allowOverride && dto.overrideConfig ? { ...saved, ...dto.overrideConfig } : saved;
+    this.assertAiModeAllowed(cfg, dto.mode, dto.payload || {}, allowOverride);
 
-    if (dto.mode !== 'TEST' && !cfg.enabled) {
-      throw new BadRequestException(
-        'Le module IA est désactivé. Demandez au compte ROOT de l’activer dans Système > Intelligence Artificielle.',
-      );
-    }
-
-    if (dto.mode === 'TEST') {
-      const res = await generateAiCompletion(
-        cfg,
-        'Tu es l’assistant technique de Royal Électro de Maison en Tunisie. Réponds en une phrase courte en français.',
-        'Confirme que la connexion IA fonctionne correctement pour Royal.',
-      );
-      return {
-        ok: true,
-        provider: res.provider,
-        model: res.model,
-        fallbackFrom: res.fallbackFrom,
-        reply: res.text,
-      };
-    }
-
-    if (dto.mode === 'PRODUCT_COPY') {
-      const p = dto.payload || {};
-      const systemPrompt = `Tu es un rédacteur e-commerce expert pour Royal Électro de Maison (Tunisie, devise TND). Ton: ${cfg.defaultTone || 'Luxe éditorial sobre, précis'}. Retourne UNIQUEMENT un objet JSON valide (sans markdown) avec exactement ces clés: {"nameAr": string, "shortDescription": string, "description": string, "metaTitle": string, "metaDesc": string, "focusKeyword": string}.`;
-      const userPrompt = `Produit: "${p.name || 'Appareil'}", Catégorie: "${p.category || 'Électroménager'}", Marque: "${p.brand || 'Royal'}", Prix: "${p.price || ''} TND". Contraintes: metaTitle <= 60 caractères, metaDesc 135-160 caractères, description riche (80-130 mots) en français, et nom commercial naturel en arabe dans nameAr.`;
-      const res = await generateAiCompletion(cfg, systemPrompt, userPrompt);
-      const parsed = extractJsonBlock(res.text);
-      if (!parsed) {
-        return {
-          ok: true,
-          provider: res.provider,
-          model: res.model,
-          data: { description: res.text },
-        };
-      }
-      return {
-        ok: true,
-        provider: res.provider,
-        model: res.model,
-        data: parsed,
-      };
-    }
-
-    // ANALYTICS_INSIGHT
-    const a = dto.payload || {};
-    const systemPrompt = `Tu es un directeur retail & e-commerce pour Royal Électro de Maison (Tunisie). Analyse les métriques et réponds UNIQUEMENT en JSON valide: {"headline": string, "summary": string, "recommendations": [{"title": string, "impact": "HAUT"|"MOYEN", "action": string}]}. Max 4 recommandations concrètes en français.`;
-    const userPrompt = `KPIs actuels: Vues=${a.totalViews || 0}, Visiteurs=${a.totalVisitors || 0}, Taux rebond=${a.avgBounce || 0}%, Taux conversion=${a.avgConversion || 0}%, Top pages=${JSON.stringify(a.topPages || [])}.`;
+    const { systemPrompt, userPrompt } = this.buildAiPrompts(dto.mode, dto.payload || {}, cfg);
     const res = await generateAiCompletion(cfg, systemPrompt, userPrompt);
-    const parsed = extractJsonBlock(res.text) || { headline: 'Analyse IA', summary: res.text, recommendations: [] };
-    return {
-      ok: true,
-      provider: res.provider,
-      model: res.model,
-      data: parsed,
-    };
+    return this.parseAiModeResponse(dto.mode, res.text, res);
   }
 
   async listAiProviderModels(provider?: string, overrideApiKey?: string) {

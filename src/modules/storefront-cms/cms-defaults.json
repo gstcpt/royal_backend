@@ -151,7 +151,8 @@
     },
     "articles": {
       "defaultColumns": "3",
-      "defaultItemsPerPage": 24,
+      "defaultItemsPerPage": 12,
+      "paginationMode": "PAGINATION",
       "cardImageHeightPx": 260,
       "showCompareButton": true,
       "showWishlistButton": true,

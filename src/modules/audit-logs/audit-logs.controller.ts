@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   Param,
   Query,
@@ -68,5 +69,27 @@ export class AuditLogsController {
   @ApiOperation({ summary: 'Enregistrement programmatique d’un événement d’audit' })
   async recordLog(@Body() dto: CreateAuditLogDto) {
     return this.auditLogsService.recordLog(dto);
+  }
+
+  @Post('bulk-delete')
+  @ApiOperation({ summary: 'Suppression multiple de logs d’audit (ROOT EXCLUSIF)' })
+  @ApiResponse({ status: 200, description: 'Logs supprimés pour libérer de l’espace' })
+  @ApiResponse({ status: 403, description: 'Suppression strictement réservée au compte ROOT' })
+  async bulkDelete(@Body() body: { ids?: string[] }, @CurrentUser() user: any) {
+    if (!user?.roles?.includes(SystemRole.ROOT)) {
+      throw new ForbiddenException('Suppression strictement réservée au compte ROOT');
+    }
+    return this.auditLogsService.bulkDelete(body?.ids || []);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Suppression d’un événement d’audit (ROOT EXCLUSIF)' })
+  @ApiResponse({ status: 200, description: 'Log supprimé' })
+  @ApiResponse({ status: 403, description: 'Suppression strictement réservée au compte ROOT' })
+  async deleteById(@Param('id') id: string, @CurrentUser() user: any) {
+    if (!user?.roles?.includes(SystemRole.ROOT)) {
+      throw new ForbiddenException('Suppression strictement réservée au compte ROOT');
+    }
+    return this.auditLogsService.deleteById(id);
   }
 }

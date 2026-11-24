@@ -383,9 +383,11 @@ export class SendDeliveryDocumentsDto {
 }
 
 export class AiGenerateDto {
-  @ApiProperty({ enum: ['PRODUCT_COPY', 'ANALYTICS_INSIGHT', 'TEST'] })
-  @IsIn(['PRODUCT_COPY', 'ANALYTICS_INSIGHT', 'TEST'])
-  mode: 'PRODUCT_COPY' | 'ANALYTICS_INSIGHT' | 'TEST';
+  @ApiProperty({
+    enum: ['PRODUCT_COPY', 'ANALYTICS_INSIGHT', 'SECTION_RECAP', 'FORM_AUTOFILL', 'TEST'],
+  })
+  @IsIn(['PRODUCT_COPY', 'ANALYTICS_INSIGHT', 'SECTION_RECAP', 'FORM_AUTOFILL', 'TEST'])
+  mode: 'PRODUCT_COPY' | 'ANALYTICS_INSIGHT' | 'SECTION_RECAP' | 'FORM_AUTOFILL' | 'TEST';
 
   @ApiPropertyOptional() @IsOptional() @IsObject() payload?: Record<string, any>;
   @ApiPropertyOptional() @IsOptional() @IsObject() overrideConfig?: Record<string, any>;

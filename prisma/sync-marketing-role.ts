@@ -125,8 +125,53 @@ async function main() {
     },
   });
 
+  // Basculer le compte marketing@royal.com.tn vers le rôle MARKETING si présent
+  const marketingUser = await prisma.user.findUnique({ where: { email: 'marketing@royal.com.tn' } });
+  if (marketingUser) {
+    await prisma.$transaction([
+      prisma.userRole.deleteMany({ where: { userId: marketingUser.id } }),
+      prisma.userRole.create({
+        data: {
+          userId: marketingUser.id,
+          roleId: role.id,
+        },
+      }),
+    ]);
+  }
+
+  // Verrouiller explicitement /dashboard/translations et /dashboard/users/marketing en PRIVATE (ROOT uniquement)
+  const existingVis = await prisma.settings.findUnique({ where: { key: 'sys.visibility' } });
+  let visMap: Record<string, string> = {};
+  if (existingVis?.value) {
+    try {
+      const parsed = JSON.parse(existingVis.value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        visMap = parsed;
+      }
+    } catch {
+      visMap = {};
+    }
+  }
+  visMap['/dashboard/translations'] = 'PRIVATE';
+  visMap['/dashboard/users/marketing'] = 'PRIVATE';
+  await prisma.settings.upsert({
+    where: { key: 'sys.visibility' },
+    update: {
+      value: JSON.stringify(visMap),
+      group: 'system',
+      updatedBy: 'SYNC_SCRIPT',
+    },
+    create: {
+      key: 'sys.visibility',
+      value: JSON.stringify(visMap),
+      group: 'system',
+      isSecret: false,
+      updatedBy: 'SYNC_SCRIPT',
+    },
+  });
+
   console.log(
-    `[OK] Role MARKETING (${role.id}) synchronisé avec ${targetPermissionIds.length} permissions validées et ${MARKETING_DEFAULT_VIEWS.length} vues autorisées.`,
+    `[OK] Role MARKETING (${role.id}) synchronisé avec ${targetPermissionIds.length} permissions, ${MARKETING_DEFAULT_VIEWS.length} vues autorisées, bascule compte marketing@royal.com.tn=${Boolean(marketingUser)}, et visibilité PRIVATE verrouillée.`,
   );
 }
 

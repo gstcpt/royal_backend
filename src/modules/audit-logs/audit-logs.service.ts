@@ -237,4 +237,20 @@ export class AuditLogsService {
       actors: uniqueActors.map((a) => a.actorEmail).filter(Boolean).sort(),
     };
   }
+
+  async deleteById(id: string) {
+    await this.prisma.auditLog.deleteMany({ where: { id } });
+    return { ok: true, deletedCount: 1 };
+  }
+
+  async bulkDelete(ids: string[]) {
+    const cleanIds = Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
+    if (cleanIds.length === 0) {
+      return { ok: true, deletedCount: 0 };
+    }
+    const res = await this.prisma.auditLog.deleteMany({
+      where: { id: { in: cleanIds } },
+    });
+    return { ok: true, deletedCount: res.count };
+  }
 }

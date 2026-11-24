@@ -706,6 +706,22 @@ export class StorefrontCmsController {
     return this.service.updateShowroom(id, dto);
   }
 
+  @Delete('cms/showrooms/:id')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('pos:delete')
+  deleteShowroom(@Param('id') id: string) {
+    return this.service.deleteShowroom(id);
+  }
+
+  @Post('cms/showrooms/bulk-action')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('pos:update')
+  bulkActionShowrooms(@Body() body: { ids: string[]; action: 'ACTIVATE' | 'DEACTIVATE' | 'DELETE' }) {
+    return this.service.bulkActionShowrooms(body?.ids || [], body?.action || 'ACTIVATE');
+  }
+
   @Post('cms/upload-image')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -828,10 +844,40 @@ export class StorefrontCmsController {
     return this.service.sendOrderDeliveryDocuments(id, dto, req.user?.email || 'STAFF');
   }
 
+  @Get('ai/availability')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  getAiAvailability() {
+    return this.service.getAiAvailability();
+  }
+
+  @Post('ai/jobs')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  startAiJob(@Body() dto: AiGenerateDto, @Req() req: any) {
+    if (dto.mode === 'TEST' && !this.isRootRequest(req)) {
+      throw new ForbiddenException('Seul le compte ROOT peut lancer un test fournisseur IA.');
+    }
+    return this.service.startAiJob(dto, dto.mode === 'TEST' && this.isRootRequest(req));
+  }
+
+  @Get('ai/jobs/:jobId')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  getAiJobStatus(@Param('jobId') jobId: string) {
+    return this.service.getAiJobStatus(jobId);
+  }
+
+  @Post('ai/jobs/:jobId/cancel')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  cancelAiJob(@Param('jobId') jobId: string) {
+    return this.service.cancelAiJob(jobId);
+  }
+
   @Post('ai/generate')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('products:update')
+  @UseGuards(JwtAuthGuard)
   generateAiContent(@Body() dto: AiGenerateDto) {
     return this.service.generateAiContent(dto, false);
   }
