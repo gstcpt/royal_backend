@@ -31,6 +31,7 @@ import {
   SubscribeNewsletterDto,
   ToggleReactionDto,
   ToggleWishlistDto,
+  TrackTelemetryDto,
   UpdateCmsIdentityDto,
   UpdateCmsLayoutDto,
   UpdateCmsPageDto,
@@ -205,39 +206,6 @@ const DEFAULT_VIEWS = {
   },
 };
 
-const DEFAULT_TESTIMONIALS = [
-  {
-    id: 'test-1',
-    name: 'Sami Ben Salem',
-    city: 'Tunis, Les Berges du Lac',
-    dateLabel: 'Il y a 2 jours',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=120&q=80',
-    stars: 5,
-    comment: 'Airfryer 8.5L reçu en moins de 24h à Tunis. Emballage parfait et facture en règle.',
-    isActive: true,
-  },
-  {
-    id: 'test-2',
-    name: 'Inès Trabelsi',
-    city: 'Sousse Sahloul',
-    dateLabel: 'Il y a 5 jours',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80',
-    stars: 5,
-    comment: 'Robot pétrin DSP 1800W très robuste. Retrait au showroom rapide et conseillers attentifs.',
-    isActive: true,
-  },
-  {
-    id: 'test-3',
-    name: 'Mohamed Ali Gharbi',
-    city: 'Sfax, Route de Téniour',
-    dateLabel: 'Il y a 1 semaine',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=120&q=80',
-    stars: 5,
-    comment: 'Four encastrable Royal acheté en ligne. Livraison soignée et service client très réactif.',
-    isActive: true,
-  },
-];
-
 @Injectable()
 export class StorefrontCmsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -395,7 +363,7 @@ export class StorefrontCmsService {
     }
 
     const snap = this.getDefaultsSnapshot();
-    const [settings, activeShowrooms] = await Promise.all([
+    const [settings, activeShowrooms, approvedReviews] = await Promise.all([
       this.prisma.settings.findMany({
         where: {
           key: {
@@ -421,6 +389,24 @@ export class StorefrontCmsService {
         where: { isActive: true },
         orderBy: { createdAt: 'asc' },
         select: { id: true, name: true, code: true, address: true, phone: true },
+      }),
+      this.prisma.review.findMany({
+        where: { status: 'APPROVED' },
+        orderBy: { createdAt: 'desc' },
+        take: 6,
+        select: {
+          id: true,
+          rating: true,
+          body: true,
+          createdAt: true,
+          customer: {
+            select: {
+              firstName: true,
+              lastName: true,
+              addresses: { take: 1, select: { city: true } },
+            },
+          },
+        },
       }),
     ]);
     const map = new Map(settings.map((s) => [s.key, s.value]));
@@ -451,7 +437,21 @@ export class StorefrontCmsService {
     };
     const rawHeroSlides = this.parseJsonSetting<any[]>(map.get('cms.heroSlides'), []);
     const heroSlides = this.sanitizeHeroSlides(rawHeroSlides, snap.heroSlides || []);
-    const testimonials = this.parseJsonSetting<any[]>(map.get('cms.testimonials'), DEFAULT_TESTIMONIALS);
+    const curatedTestimonials = this.parseJsonSetting<any[]>(map.get('cms.testimonials'), []);
+    const fallbackDbTestimonials = approvedReviews.map((r) => ({
+      id: r.id,
+      name: `${r.customer?.firstName || 'Client'} ${r.customer?.lastName || 'Royal'}`.trim(),
+      city: r.customer?.addresses?.[0]?.city || 'Tunisie',
+      dateLabel: new Date(r.createdAt).toLocaleDateString('fr-FR'),
+      avatar: null,
+      stars: r.rating,
+      comment: r.body || '',
+      isActive: true,
+    }));
+    const activeTestimonials =
+      Array.isArray(curatedTestimonials) && curatedTestimonials.length > 0
+        ? curatedTestimonials.filter((t) => t.isActive !== false)
+        : fallbackDbTestimonials;
     const translations = this.parseJsonSetting<any>(map.get('sys.translations'), null);
 
     const payload = {
@@ -480,7 +480,7 @@ export class StorefrontCmsService {
       views,
       heroSlides,
       defaults: snap,
-      testimonials: Array.isArray(testimonials) ? testimonials.filter((t) => t.isActive !== false) : DEFAULT_TESTIMONIALS,
+      testimonials: activeTestimonials,
       translations: translations && typeof translations === 'object' ? translations : null,
       contact: {
         companyName: identity.companyName || ROYAL_CONTACT_INFO.companyName,
@@ -726,6 +726,7 @@ export class StorefrontCmsService {
       unreadSupportMsgs,
       unreadContacts,
       brandProductGroups,
+      warehousesList,
     ] = await Promise.all([
       this.prisma.product.count({ where: { status: 'ACTIVE', deletedAt: null } }),
       this.prisma.category.findMany({
@@ -809,6 +810,11 @@ export class StorefrontCmsService {
         where: { status: 'ACTIVE', deletedAt: null },
         _count: { _all: true },
       }),
+      this.prisma.warehouse.findMany({
+        where: { isDeleted: false, isActive: true },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+        select: { id: true, code: true, name: true },
+      }),
     ]);
 
     const catChildren = new Map<string | null, string[]>();
@@ -833,13 +839,13 @@ export class StorefrontCmsService {
 
     const analytics = this.buildOrderAnalytics(allOrdersRaw);
     const avgRating = Number(reviewsAgg._avg.rating || 0);
-    const satisfactionScore = avgRating > 0 ? Math.round((avgRating / 5) * 100) : 94;
+    const satisfactionScore = avgRating > 0 ? Math.round((avgRating / 5) * 100) : 0;
 
     const nonCancelled = orderStatusGroups
       .filter((g) => g.status !== 'CANCELLED')
       .reduce((acc, g) => acc + g._count._all, 0);
     const orderCompletionRate =
-      ordersCount > 0 ? Math.round((nonCancelled / ordersCount) * 100) : 100;
+      ordersCount > 0 ? Math.round((nonCancelled / ordersCount) * 100) : 0;
 
     const unreadMessages = [
       ...unreadSupportMsgs.map((m) => ({
@@ -875,6 +881,8 @@ export class StorefrontCmsService {
       salesCount: salesAgg._count._all || 0,
       salesTotal: Number(salesAgg._sum.totalAmount || 0),
       lowStockCount,
+      warehousesCount: warehousesList.length,
+      primaryWarehouseCode: warehousesList[0]?.code || '',
       topCategories,
       ordersByStatus: orderStatusGroups.map((g) => ({
         status: g.status,
@@ -1047,7 +1055,7 @@ export class StorefrontCmsService {
     const avgScore =
       myReviews.length > 0
         ? Math.round((myReviews.reduce((s, r) => s + r.rating, 0) / myReviews.length / 5) * 100)
-        : 100;
+        : 0;
     const totalSpent = myOrders
       .filter((o) => o.status !== 'CANCELLED')
       .reduce((s, o) => s + Number(o.totalAmount || 0), 0);
@@ -1091,12 +1099,13 @@ export class StorefrontCmsService {
       salesTotal: totalSpent,
       ordersByStatus: Array.from(statusCountsMap.values()),
       satisfactionScore: avgScore,
+      reviewsTotalCount: myReviews.length,
       orderCompletionRate:
         myOrders.length > 0
           ? Math.round(
               (myOrders.filter((o) => o.status !== 'CANCELLED').length / myOrders.length) * 100,
             )
-          : 100,
+          : 0,
       unreadMessages,
       ...analytics,
     };
@@ -1316,10 +1325,57 @@ export class StorefrontCmsService {
     return { deleted: true, id };
   }
 
+  async recordTelemetryEvent(dto: TrackTelemetryDto, userAgent = '') {
+    try {
+      const cleanSession = String(dto.sessionHash || 'anon').trim().slice(0, 64) || 'anon';
+      const cleanPath = String(dto.pagePath || '/').split('?')[0].slice(0, 255) || '/';
+      let browserFamily = dto.browserFamily || 'Other';
+      if (!dto.browserFamily && userAgent) {
+        if (/Edg\//i.test(userAgent)) browserFamily = 'Edge';
+        else if (/Chrome\//i.test(userAgent)) browserFamily = 'Chrome';
+        else if (/Firefox\//i.test(userAgent)) browserFamily = 'Firefox';
+        else if (/Safari\//i.test(userAgent)) browserFamily = 'Safari';
+      }
+      const detectedDevice =
+        dto.deviceType ||
+        (/mobile|iphone|android/i.test(userAgent)
+          ? 'MOBILE'
+          : /tablet|ipad/i.test(userAgent)
+            ? 'TABLET'
+            : 'DESKTOP');
+
+      await this.prisma.trafficEvent.create({
+        data: {
+          sessionHash: cleanSession,
+          eventType: dto.eventType,
+          pagePath: cleanPath,
+          referrer: dto.referrer ? String(dto.referrer).slice(0, 255) : null,
+          utmSource: dto.utmSource ? String(dto.utmSource).slice(0, 120) : null,
+          utmMedium: dto.utmMedium ? String(dto.utmMedium).slice(0, 120) : null,
+          utmCampaign: dto.utmCampaign ? String(dto.utmCampaign).slice(0, 120) : null,
+          deviceType: detectedDevice,
+          browserFamily,
+          metadata:
+            dto.metadata || dto.durationSeconds !== undefined || dto.pageTitle
+              ? {
+                  ...(dto.metadata || {}),
+                  ...(dto.durationSeconds !== undefined ? { durationSeconds: Number(dto.durationSeconds) } : {}),
+                  ...(dto.pageTitle ? { pageTitle: String(dto.pageTitle).slice(0, 180) } : {}),
+                }
+              : undefined,
+        },
+      });
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  }
+
   async getSalesReport() {
     const orderItems = await this.prisma.orderItem.findMany({
-      where: { order: { status: { not: 'CANCELLED' } } },
+      where: { order: { isDeleted: false, status: { not: 'CANCELLED' } } },
       include: {
+        order: { select: { createdAt: true, totalAmount: true } },
         product: {
           select: {
             id: true,
@@ -1334,7 +1390,27 @@ export class StorefrontCmsService {
       },
     });
 
+    const MONTHS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+    const now = new Date();
+    const monthlyMap = new Map<
+      string,
+      { key: string; label: string; ttcRevenue: number; netRevenue: number; marginAmount: number }
+    >();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      monthlyMap.set(key, {
+        key,
+        label: MONTHS_FR[d.getMonth()],
+        ttcRevenue: 0,
+        netRevenue: 0,
+        marginAmount: 0,
+      });
+    }
+
     const grouped = new Map<string, any>();
+    const categoryTotals = new Map<string, number>();
+
     for (const item of orderItems) {
       const pid = item.productId;
       const qty = item.quantity || 1;
@@ -1343,11 +1419,28 @@ export class StorefrontCmsService {
       const netUnit = Number(item.unitPrice || item.product?.discountPrice || grossUnit);
       const taxRate = Number(item.product?.taxRate ?? 0.19);
       const ttcTotal = Number(item.totalPrice || netUnit * qty * (1 + taxRate));
+      const catName = item.product?.category?.name || 'Catalogue';
+      const itemNet = netUnit * qty;
+      const itemCost = costUnit * qty;
+      const itemMargin = itemNet - itemCost;
+
+      categoryTotals.set(catName, (categoryTotals.get(catName) || 0) + itemNet);
+
+      if (item.order?.createdAt) {
+        const dt = new Date(item.order.createdAt);
+        const mKey = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+        const slot = monthlyMap.get(mKey);
+        if (slot) {
+          slot.ttcRevenue += ttcTotal;
+          slot.netRevenue += itemNet;
+          slot.marginAmount += itemMargin;
+        }
+      }
 
       const prev = grouped.get(pid) || {
         id: pid,
         articleName: item.productName || item.product?.name || 'Article Royal',
-        categoryName: item.product?.category?.name || 'Catalogue',
+        categoryName: catName,
         unitsSold: 0,
         totalCostPrice: 0,
         totalGrossSales: 0,
@@ -1355,43 +1448,14 @@ export class StorefrontCmsService {
         totalTtcSales: 0,
       };
       prev.unitsSold += qty;
-      prev.totalCostPrice += costUnit * qty;
+      prev.totalCostPrice += itemCost;
       prev.totalGrossSales += grossUnit * qty;
-      prev.totalNetSales += netUnit * qty;
+      prev.totalNetSales += itemNet;
       prev.totalTtcSales += ttcTotal;
       grouped.set(pid, prev);
     }
 
-    // Fallback when zero orders yet: compute projected margin catalog from all active products
-    if (grouped.size === 0) {
-      const topProducts = await this.prisma.product.findMany({
-        where: { isDeleted: false, status: 'ACTIVE' },
-        orderBy: [{ isFeatured: 'desc' }, { viewCount: 'desc' }],
-        include: { category: { select: { name: true } } },
-      });
-      return topProducts.map((p) => {
-        const cost = Number(p.basePrice || 0);
-        const gross = Number(p.sellingPrice || 0);
-        const net = Number(p.discountPrice || gross);
-        const ttc = Number((net * (1 + Number(p.taxRate ?? 0.19))).toFixed(3));
-        const margin = net - cost;
-        const pct = net > 0 ? Number(((margin / net) * 100).toFixed(1)) : 0;
-        return {
-          id: p.id,
-          articleName: p.name,
-          categoryName: p.category?.name || 'Catalogue Royal',
-          unitsSold: 0,
-          totalCostPrice: cost,
-          totalGrossSales: gross,
-          totalNetSales: net,
-          totalTtcSales: ttc,
-          marginAmount: margin,
-          marginPercentage: pct,
-        };
-      });
-    }
-
-    return Array.from(grouped.values()).map((row) => {
+    const items = Array.from(grouped.values()).map((row) => {
       const marginAmount = row.totalNetSales - row.totalCostPrice;
       const marginPercentage =
         row.totalNetSales > 0
@@ -1407,75 +1471,401 @@ export class StorefrontCmsService {
         marginPercentage,
       };
     });
+
+    const monthlyTrend = Array.from(monthlyMap.values()).map((m) => ({
+      label: m.label,
+      value: Math.round(m.ttcRevenue),
+      secondaryValue: Math.round(m.marginAmount),
+    }));
+
+    const currMonth = monthlyTrend[monthlyTrend.length - 1]?.value || 0;
+    const prevMonth = monthlyTrend[monthlyTrend.length - 2]?.value || 0;
+    const deltaPct =
+      prevMonth > 0
+        ? (((currMonth - prevMonth) / prevMonth) * 100).toFixed(1)
+        : currMonth > 0
+          ? '100.0'
+          : '0.0';
+    const deltaLabel = `${Number(deltaPct) >= 0 ? '+' : ''}${deltaPct}% vs M-1`;
+
+    const categoryBreakdown = Array.from(categoryTotals.entries())
+      .map(([label, val]) => ({ label, value: Math.round(val) }))
+      .filter((c) => c.value > 0)
+      .sort((a, b) => b.value - a.value);
+
+    return {
+      items,
+      monthlyTrend,
+      deltaLabel,
+      categoryBreakdown,
+    };
   }
 
   async getAnalyticsReport() {
-    const [topProducts, totalOrders, totalUsers, totalFavorites] = await Promise.all([
+    const since90d = new Date(Date.now() - 90 * 86400_000);
+    const [trafficEvents, activeProducts, cartItemsCount, totalOrders] = await Promise.all([
+      this.prisma.trafficEvent.findMany({
+        where: { occurredAt: { gte: since90d } },
+        orderBy: { occurredAt: 'desc' },
+        take: 10000,
+      }),
       this.prisma.product.findMany({
         where: { isDeleted: false, status: 'ACTIVE' },
         orderBy: [{ viewCount: 'desc' }, { likeCount: 'desc' }],
-        select: { id: true, name: true, slug: true, viewCount: true, likeCount: true, favoriteCount: true, createdAt: true },
+        select: { id: true, name: true, slug: true, viewCount: true, createdAt: true },
       }),
-      this.prisma.order.count(),
-      this.prisma.user.count({ where: { isDeleted: false } }),
-      this.prisma.favorite.count(),
+      this.prisma.cartItem.count(),
+      this.prisma.order.count({ where: { isDeleted: false, status: { not: 'CANCELLED' } } }),
     ]);
 
-    const productViewsSum = topProducts.reduce((s, p) => s + (p.viewCount || 0), 0);
-    const nowIso = new Date().toISOString();
-    const baseConv = productViewsSum > 0 && totalOrders > 0
-      ? Number(((totalOrders / productViewsSum) * 100).toFixed(1))
-      : 4.5;
+    const pageViews = trafficEvents.filter((e) => e.eventType === 'PAGE_VIEW');
+    const pageLeaves = trafficEvents.filter((e) => e.eventType === 'PAGE_LEAVE');
+    const productViewEvents = trafficEvents.filter((e) => e.eventType === 'PRODUCT_VIEW');
+    const addToCartEvents = trafficEvents.filter((e) => e.eventType === 'ADD_TO_CART');
+    const checkoutEvents = trafficEvents.filter((e) => e.eventType === 'BEGIN_CHECKOUT');
+    const purchaseEvents = trafficEvents.filter((e) => e.eventType === 'PURCHASE');
 
-    const systemRoutes = [
+    // Compute per-session page count to detect true 1-page bounces
+    const sessionPageCount = new Map<string, number>();
+    for (const ev of pageViews) {
+      sessionPageCount.set(ev.sessionHash, (sessionPageCount.get(ev.sessionHash) || 0) + 1);
+    }
+
+    // Group real duration per path
+    const durationByPath = new Map<string, number[]>();
+    for (const lv of pageLeaves) {
+      const cleanPath = lv.pagePath || '/';
+      const dur = Number((lv.metadata as any)?.durationSeconds || 0);
+      if (dur > 0) {
+        if (!durationByPath.has(cleanPath)) durationByPath.set(cleanPath, []);
+        durationByPath.get(cleanPath)!.push(dur);
+      }
+    }
+
+    // Aggregate per pagePath from TrafficEvent
+    const pathMap = new Map<
+      string,
       {
-        id: 'route-home',
-        pagePath: '/',
-        pageTitle: 'Accueil Storefront — Royal Luxury Home',
-        viewsCount: Math.max(productViewsSum + totalUsers * 4, 120),
-        uniqueVisitors: Math.max(totalUsers * 3, 85),
-        avgTimeSeconds: 145,
-        bounceRatePercent: 24.5,
-        conversionRatePercent: baseConv,
-        createdAt: nowIso,
+        id: string;
+        pagePath: string;
+        pageTitle: string;
+        viewsCount: number;
+        sessions: Set<string>;
+        conversions: number;
+        lastAt: string;
+      }
+    >();
+
+    for (const ev of pageViews) {
+      const cleanPath = ev.pagePath || '/';
+      const existing = pathMap.get(cleanPath) || {
+        id: `pv-${cleanPath}`,
+        pagePath: cleanPath,
+        pageTitle: String((ev.metadata as any)?.pageTitle || '').trim() || cleanPath,
+        viewsCount: 0,
+        sessions: new Set<string>(),
+        conversions: 0,
+        lastAt: ev.occurredAt.toISOString(),
+      };
+      existing.viewsCount += 1;
+      existing.sessions.add(ev.sessionHash);
+      if (existing.pageTitle === cleanPath && (ev.metadata as any)?.pageTitle) {
+        existing.pageTitle = String((ev.metadata as any).pageTitle);
+      }
+      pathMap.set(cleanPath, existing);
+    }
+
+    // Attach purchase sessions per path
+    const purchaseSessions = new Set(purchaseEvents.map((p) => p.sessionHash));
+    for (const entry of pathMap.values()) {
+      for (const s of entry.sessions) {
+        if (purchaseSessions.has(s)) entry.conversions += 1;
+      }
+    }
+
+    // Merge real Product.viewCount from catalog if not already covered by TrafficEvent
+    const prodPathLookup = new Map(activeProducts.map((p) => [`/articles/${p.slug}`, p]));
+    for (const p of activeProducts) {
+      const slugPath = `/articles/${p.slug}`;
+      const existing = pathMap.get(slugPath);
+      if (existing) {
+        existing.pageTitle = p.name;
+        existing.viewsCount = Math.max(existing.viewsCount, p.viewCount || 0);
+      } else if ((p.viewCount || 0) > 0) {
+        pathMap.set(slugPath, {
+          id: p.id,
+          pagePath: slugPath,
+          pageTitle: p.name,
+          viewsCount: p.viewCount || 0,
+          sessions: new Set<string>(),
+          conversions: 0,
+          lastAt: p.createdAt.toISOString(),
+        });
+      }
+    }
+
+    const items = Array.from(pathMap.values())
+      .map((row) => {
+        const durs = durationByPath.get(row.pagePath) || [];
+        const avgTimeSeconds = durs.length > 0 ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length) : 0;
+        const uniqueVisitors = row.sessions.size;
+        let singlePageSessions = 0;
+        for (const s of row.sessions) {
+          if ((sessionPageCount.get(s) || 0) <= 1) singlePageSessions += 1;
+        }
+        const bounceRatePercent =
+          uniqueVisitors > 0 ? Number(((singlePageSessions / uniqueVisitors) * 100).toFixed(1)) : 0;
+        const conversionRatePercent =
+          uniqueVisitors > 0
+            ? Number(((row.conversions / uniqueVisitors) * 100).toFixed(1))
+            : 0;
+        const prodMatch = prodPathLookup.get(row.pagePath);
+        return {
+          id: prodMatch?.id || row.id,
+          pagePath: row.pagePath,
+          pageTitle: row.pageTitle,
+          viewsCount: row.viewsCount,
+          uniqueVisitors,
+          avgTimeSeconds,
+          bounceRatePercent,
+          conversionRatePercent,
+          createdAt: row.lastAt,
+        };
+      })
+      .sort((a, b) => b.viewsCount - a.viewsCount);
+
+    // 7-day daily momentum
+    const WEEKDAYS_FR = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+    const now = new Date();
+    const dailyMomentum: Array<{ label: string; value: number; secondaryValue: number }> = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+      const dayIso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const dayViews = pageViews.filter((e) => e.occurredAt.toISOString().slice(0, 10) === dayIso);
+      const uniqDay = new Set(dayViews.map((e) => e.sessionHash)).size;
+      dailyMomentum.push({
+        label: WEEKDAYS_FR[d.getDay()],
+        value: dayViews.length,
+        secondaryValue: uniqDay,
+      });
+    }
+
+    // Acquisition channels from real UTM / Referrer
+    const channelCounts = new Map<string, number>();
+    for (const ev of pageViews) {
+      const src = (ev.utmSource || '').toLowerCase();
+      const ref = (ev.referrer || '').toLowerCase();
+      let bucket = 'Accès Direct Royal';
+      if (/facebook|fb|instagram|ig|tiktok|snap/i.test(src + ' ' + ref)) {
+        bucket = 'Réseaux Sociaux (FB/IG/TT)';
+      } else if (/google|bing|yahoo/i.test(src + ' ' + ref)) {
+        bucket = 'Recherche SEO / Google';
+      } else if (/email|newsletter|mail|promo/i.test(src + ' ' + (ev.utmMedium || ''))) {
+        bucket = 'Campagnes Email & Promo';
+      } else if (ref) {
+        bucket = 'Sites Référents';
+      }
+      channelCounts.set(bucket, (channelCounts.get(bucket) || 0) + 1);
+    }
+    const channelColors: Record<string, string> = {
+      'Recherche SEO / Google': '#C59B27',
+      'Réseaux Sociaux (FB/IG/TT)': '#64748B',
+      'Accès Direct Royal': '#059669',
+      'Campagnes Email & Promo': '#D97706',
+      'Sites Référents': '#94A3B8',
+    };
+    const acquisitionChannels = Array.from(channelCounts.entries()).map(([label, value]) => ({
+      label,
+      value,
+      color: channelColors[label] || '#C59B27',
+    }));
+
+    // 5-month device segments
+    const MONTHS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+    const deviceMonthlyMap = new Map<string, { label: string; primary: number; secondary: number; tertiary: number }>();
+    for (let i = 4; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      deviceMonthlyMap.set(mKey, { label: MONTHS_FR[d.getMonth()], primary: 0, secondary: 0, tertiary: 0 });
+    }
+    for (const ev of pageViews) {
+      const dt = new Date(ev.occurredAt);
+      const mKey = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+      const slot = deviceMonthlyMap.get(mKey);
+      if (slot) {
+        if (ev.deviceType === 'MOBILE') slot.primary += 1;
+        else if (ev.deviceType === 'TABLET') slot.tertiary += 1;
+        else slot.secondary += 1;
+      }
+    }
+    const deviceMonthlySegments = Array.from(deviceMonthlyMap.values());
+
+    const totalProductViewsDb = activeProducts.reduce((acc, p) => acc + (p.viewCount || 0), 0);
+    const totalPageViewsAll = Math.max(pageViews.length, totalProductViewsDb);
+    const productViewsCount = Math.max(productViewEvents.length, totalProductViewsDb);
+    const addToCartCount = Math.max(addToCartEvents.length, cartItemsCount);
+    const checkoutCount = Math.max(checkoutEvents.length, totalOrders);
+    const ordersValidatedCount = Math.max(purchaseEvents.length, totalOrders);
+    const funnelBase = Math.max(1, totalPageViewsAll);
+
+    const conversionFunnel = [
+      {
+        label: 'Consultation Fiche Produit',
+        value: totalPageViewsAll > 0 ? Math.min(100, Math.round((productViewsCount / funnelBase) * 100)) : 0,
+        unit: '%',
       },
       {
-        id: 'route-articles',
-        pagePath: '/articles',
-        pageTitle: 'Catalogue Officiel Royal',
-        viewsCount: Math.max(productViewsSum, 90),
-        uniqueVisitors: Math.max(Math.round(productViewsSum * 0.72), 60),
-        avgTimeSeconds: 185,
-        bounceRatePercent: 19.8,
-        conversionRatePercent: Number((baseConv + 1.1).toFixed(1)),
-        createdAt: nowIso,
+        label: 'Ajout au Panier',
+        value: totalPageViewsAll > 0 ? Math.min(100, Math.round((addToCartCount / funnelBase) * 100)) : 0,
+        unit: '%',
       },
       {
-        id: 'route-checkout',
-        pagePath: '/checkout',
-        pageTitle: 'Tunnel Commande & Livraison',
-        viewsCount: Math.max(totalOrders * 2 + totalFavorites, 18),
-        uniqueVisitors: Math.max(totalOrders + totalFavorites, 12),
-        avgTimeSeconds: 290,
-        bounceRatePercent: 11.2,
-        conversionRatePercent: totalOrders > 0 ? 64.0 : 50.0,
-        createdAt: nowIso,
+        label: 'Ouverture Checkout',
+        value: totalPageViewsAll > 0 ? Math.min(100, Math.round((checkoutCount / funnelBase) * 100)) : 0,
+        unit: '%',
+      },
+      {
+        label: 'Commande Validée',
+        value: totalPageViewsAll > 0 ? Math.min(100, Math.round((ordersValidatedCount / funnelBase) * 100)) : 0,
+        unit: '%',
       },
     ];
 
-    const productRows = topProducts.map((p) => ({
-      id: p.id,
-      pagePath: `/articles/${p.slug}`,
-      pageTitle: p.name,
-      viewsCount: Math.max(p.viewCount || 0, (p.likeCount || 0) + (p.favoriteCount || 0) + 1),
-      uniqueVisitors: Math.max(1, Math.round((p.viewCount || (p.likeCount + 1)) * 0.8)),
-      avgTimeSeconds: 165,
-      bounceRatePercent: 21.0,
-      conversionRatePercent: baseConv,
-      createdAt: p.createdAt.toISOString(),
-    }));
+    const totalUniqueVisitors = new Set(pageViews.map((e) => e.sessionHash)).size;
+    let totalSingleSession = 0;
+    for (const cnt of sessionPageCount.values()) {
+      if (cnt <= 1) totalSingleSession += 1;
+    }
+    const avgBounce =
+      totalUniqueVisitors > 0 ? Number(((totalSingleSession / totalUniqueVisitors) * 100).toFixed(1)) : 0;
+    const avgConversion =
+      purchaseEvents.length > 0 && totalUniqueVisitors > 0
+        ? Math.min(100, Number(((purchaseEvents.length / totalUniqueVisitors) * 100).toFixed(1)))
+        : Math.max(totalUniqueVisitors, totalPageViewsAll) > 0 && ordersValidatedCount > 0
+          ? Math.min(100, Number(((ordersValidatedCount / Math.max(totalUniqueVisitors, totalPageViewsAll)) * 100).toFixed(1)))
+          : 0;
 
-    return [...systemRoutes, ...productRows];
+    return {
+      items,
+      summary: {
+        totalViews: items.reduce((a, i) => a + i.viewsCount, 0),
+        totalVisitors: totalUniqueVisitors,
+        avgBounce,
+        avgConversion,
+      },
+      charts: {
+        dailyMomentum,
+        acquisitionChannels,
+        deviceMonthlySegments,
+        conversionFunnel,
+      },
+    };
+  }
+
+  async getTreasuryReport() {
+    const [salesAgg, cashRegisters, payments, txRow, accRow] = await Promise.all([
+      this.prisma.order.aggregate({
+        where: { isDeleted: false, status: { not: 'CANCELLED' } },
+        _sum: { totalAmount: true },
+      }),
+      this.prisma.cashRegister.findMany({
+        where: { isActive: true },
+        include: {
+          pos: { select: { name: true } },
+          sessions: {
+            include: { movements: true },
+          },
+        },
+      }),
+      this.prisma.payment.findMany({
+        select: { id: true, method: true, status: true, amount: true },
+      }),
+      this.prisma.settings.findUnique({ where: { key: 'sys.treasuryTransactions' } }),
+      this.prisma.settings.findUnique({ where: { key: 'sys.treasuryAccounts' } }),
+    ]);
+
+    const txs = this.parseJsonSetting<any[]>(txRow?.value, []);
+    const manualAccounts = this.parseJsonSetting<any[]>(accRow?.value, []);
+
+    const caissesMap = new Map<
+      string,
+      { name: string; encaissements: number; decaissements: number; transferts: number }
+    >();
+
+    for (const reg of cashRegisters) {
+      const label = reg.pos?.name ? `${reg.name} (${reg.pos.name})` : reg.name;
+      let enc = 0;
+      let dec = 0;
+      for (const s of reg.sessions || []) {
+        for (const m of s.movements || []) {
+          const amt = Number(m.amount || 0);
+          if (['OPENING', 'SALE', 'DEPOSIT'].includes(m.type)) enc += amt;
+          else if (['REFUND', 'EXPENSE', 'WITHDRAWAL'].includes(m.type)) dec += amt;
+        }
+      }
+      caissesMap.set(label, { name: label, encaissements: enc, decaissements: dec, transferts: 0 });
+    }
+
+    // Add real online/COD payments recorded in Payment table when completed
+    const completedOnlinePayments = payments
+      .filter((p) => p.status === 'COMPLETED')
+      .reduce((s, p) => s + Number(p.amount || 0), 0);
+    if (completedOnlinePayments > 0) {
+      caissesMap.set('Encaissements Commandes Web', {
+        name: 'Encaissements Commandes Web',
+        encaissements: completedOnlinePayments,
+        decaissements: 0,
+        transferts: 0,
+      });
+    }
+
+    // Incorporate user-created manual treasury accounts & transactions
+    for (const acc of Array.isArray(manualAccounts) ? manualAccounts : []) {
+      const accName = acc?.name || acc?.code || 'Compte Trésorerie';
+      const matchingTxs = (Array.isArray(txs) ? txs : []).filter(
+        (t: any) =>
+          (t.account && String(t.account).toLowerCase().includes(String(accName).toLowerCase().slice(0, 10))) ||
+          (t.accountCode && acc.code && t.accountCode === acc.code),
+      );
+      const enc = matchingTxs
+        .filter((t: any) => t.type === 'INFLOW')
+        .reduce((s: number, t: any) => s + Number(t.amount ?? t.amountTnd ?? 0), 0);
+      const dec = matchingTxs
+        .filter((t: any) => t.type === 'OUTFLOW')
+        .reduce((s: number, t: any) => s + Number(t.amount ?? t.amountTnd ?? 0), 0);
+      const trf = matchingTxs
+        .filter((t: any) => t.method === 'TRANSFER')
+        .reduce((s: number, t: any) => s + Number(t.amount ?? t.amountTnd ?? 0), 0);
+
+      const prev = caissesMap.get(accName) || {
+        name: accName,
+        encaissements: 0,
+        decaissements: 0,
+        transferts: 0,
+      };
+      prev.encaissements += enc > 0 ? enc : Number(acc.currentBalanceTnd || 0);
+      prev.decaissements += dec;
+      prev.transferts += trf;
+      caissesMap.set(accName, prev);
+    }
+
+    const caissesStats = Array.from(caissesMap.values());
+    const totalEncaissements = caissesStats.reduce((s, c) => s + c.encaissements, 0);
+    const totalDecaissements = caissesStats.reduce((s, c) => s + c.decaissements, 0);
+    const totalTransferts = caissesStats.reduce((s, c) => s + c.transferts, 0);
+    const coverageScore =
+      totalEncaissements + totalDecaissements > 0
+        ? Math.round((totalEncaissements / (totalEncaissements + totalDecaissements)) * 100)
+        : 0;
+
+    return {
+      salesTotal: Number(salesAgg._sum.totalAmount || 0),
+      caissesStats,
+      totalEncaissements,
+      totalDecaissements,
+      totalTransferts,
+      coverageScore,
+    };
   }
 
   async getInteractionsReport() {
@@ -1972,6 +2362,16 @@ export class StorefrontCmsService {
     const dp = p.discountPrice ? Number(p.discountPrice) : null;
     const discountPct =
       dp !== null && dp > 0 && dp < sp ? Math.round(((sp - dp) / sp) * 100) : null;
+    const approvedReviews = Array.isArray(p.reviews) ? p.reviews : [];
+    const ratingAvg =
+      approvedReviews.length > 0
+        ? Number(
+            (
+              approvedReviews.reduce((acc: number, r: any) => acc + Number(r.rating || 0), 0) /
+              approvedReviews.length
+            ).toFixed(1),
+          )
+        : 0;
     return {
       id: p.id,
       sku: p.sku,
@@ -1995,12 +2395,12 @@ export class StorefrontCmsService {
             attributesJson: v.attributesJson,
           }))
         : [],
-      reviewsCount: p._count?.reviews ?? 0,
-      reviewCount: p._count?.reviews ?? 0,
+      reviewsCount: p._count?.reviews ?? approvedReviews.length,
+      reviewCount: p._count?.reviews ?? approvedReviews.length,
       likeCount: p.likeCount ?? 0,
       dislikeCount: p.dislikeCount ?? 0,
       favoriteCount: p.favoriteCount ?? 0,
-      rating: 5,
+      rating: ratingAvg,
       stockStatus: 'IN_STOCK',
     };
   }
@@ -2010,7 +2410,8 @@ export class StorefrontCmsService {
     category: { select: { name: true, slug: true } },
     brand: { select: { name: true, slug: true } },
     variants: { orderBy: { sortOrder: 'asc' as const } },
-    _count: { select: { reviews: true } },
+    reviews: { where: { status: 'APPROVED' as const }, select: { rating: true } },
+    _count: { select: { reviews: { where: { status: 'APPROVED' as const } } } },
   };
 
   async toggleCustomerWishlist(userId: string, dto: ToggleWishlistDto) {
@@ -2976,7 +3377,7 @@ export class StorefrontCmsService {
 
   async listCuratedTestimonials() {
     const row = await this.prisma.settings.findUnique({ where: { key: 'cms.testimonials' } });
-    return this.parseJsonSetting<any[]>(row?.value, DEFAULT_TESTIMONIALS);
+    return this.parseJsonSetting<any[]>(row?.value, []);
   }
 
   async createCuratedTestimonial(dto: UpsertCuratedTestimonialDto, updatedBy?: string) {
@@ -2986,7 +3387,7 @@ export class StorefrontCmsService {
       name: dto.name,
       city: dto.city || 'Tunisie',
       dateLabel: dto.dateLabel || "Aujourd'hui",
-      avatar: dto.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=120&q=80',
+      avatar: dto.avatar || '',
       stars: Math.min(5, Math.max(1, dto.stars || 5)),
       comment: dto.comment,
       isActive: dto.isActive !== false,
@@ -3255,8 +3656,8 @@ export class StorefrontCmsService {
         }),
       ]);
 
-      const totalMsgs = Math.max(1, contactsCount + supportCount);
-      const resolutionRate = Math.round(((repliedContactsCount + resolvedSupportCount) / totalMsgs) * 100);
+      const totalMsgs = contactsCount + supportCount;
+      const resolutionRate = totalMsgs > 0 ? Math.round(((repliedContactsCount + resolvedSupportCount) / totalMsgs) * 100) : 0;
 
       return {
         section: key,
@@ -3336,7 +3737,7 @@ export class StorefrontCmsService {
         label: r.displayName || r.name,
         count: r._count.userRoles,
       }));
-      const activeRate = Math.round((activeUsers / Math.max(1, usersCount)) * 100);
+      const activeRate = usersCount > 0 ? Math.round((activeUsers / usersCount) * 100) : 0;
       return {
         section: key,
         kpis: {
@@ -3422,7 +3823,7 @@ export class StorefrontCmsService {
         .filter((b) => b.count > 0)
         .sort((a, b) => b.count - a.count)
         .slice(0, 6);
-      const activeRate = Math.round((activeProducts / Math.max(1, productsCount)) * 100);
+      const activeRate = productsCount > 0 ? Math.round((activeProducts / productsCount) * 100) : 0;
       return {
         section: key,
         kpis: {
@@ -3459,12 +3860,15 @@ export class StorefrontCmsService {
     }
 
     if (key === 'treasury') {
-      const [caissesCount, openSessions, movementsCount, paymentsAgg, recentMovements, recentPayments, txSys, paySys] =
+      const [caissesCount, openSessions, movementsCount, paymentsAgg, cashMovementsAll, recentMovements, recentPayments, txSys, paySys] =
         await Promise.all([
           this.prisma.cashRegister.count({ where: { isActive: true } }),
           this.prisma.cashRegisterSession.count({ where: { closedAt: null } }),
           this.prisma.cashMovement.count(),
           this.prisma.payment.aggregate({ _sum: { amount: true }, where: { status: 'COMPLETED' } }),
+          this.prisma.cashMovement.findMany({
+            select: { type: true, amount: true },
+          }),
           this.prisma.cashMovement.findMany({
             take: 10,
             orderBy: { createdAt: 'desc' },
@@ -3479,11 +3883,23 @@ export class StorefrontCmsService {
           this.getSysConfig('treasuryPayments').then((r) => (Array.isArray(r.value) ? r.value : [])).catch(() => []),
         ]);
 
+      const dbCashInflow = cashMovementsAll
+        .filter((m) => ['OPENING', 'SALE', 'DEPOSIT'].includes(m.type))
+        .reduce((s, m) => s + Number(m.amount || 0), 0);
+      const dbCashOutflow = cashMovementsAll
+        .filter((m) => ['REFUND', 'EXPENSE', 'WITHDRAWAL'].includes(m.type))
+        .reduce((s, m) => s + Number(m.amount || 0), 0);
+      const dbPosSales = cashMovementsAll
+        .filter((m) => m.type === 'SALE')
+        .reduce((s, m) => s + Number(m.amount || 0), 0);
+
       const sysTxCount = txSys.length;
-      const sysInflow = txSys.filter((t: any) => t.direction === 'IN' || t.type === 'RECEIPT').reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
-      const sysOutflow = txSys.filter((t: any) => t.direction === 'OUT' || t.type === 'DISBURSEMENT').reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
+      const sysInflow = txSys.filter((t: any) => t.direction === 'IN' || t.type === 'RECEIPT' || t.type === 'INFLOW').reduce((s: number, t: any) => s + Number(t.amount ?? t.amountTnd ?? 0), 0);
+      const sysOutflow = txSys.filter((t: any) => t.direction === 'OUT' || t.type === 'DISBURSEMENT' || t.type === 'OUTFLOW').reduce((s: number, t: any) => s + Number(t.amount ?? t.amountTnd ?? 0), 0);
       const sysPaidTotal = paySys.filter((p: any) => p.status === 'PAID' || p.status === 'ENCAISSE').reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
-      const combinedPayments = Number(paymentsAgg._sum.amount || 0) + sysPaidTotal;
+      const combinedPayments = Number(paymentsAgg._sum.amount || 0) + sysPaidTotal + dbPosSales;
+      const totalInflows = dbCashInflow + sysInflow + Number(paymentsAgg._sum.amount || 0);
+      const totalOutflows = dbCashOutflow + sysOutflow;
 
       const byMethodMap: Record<string, number> = {};
       recentPayments.forEach((p) => {
@@ -3494,7 +3910,35 @@ export class StorefrontCmsService {
         const m = p.method || p.paymentMethod || 'VIREMENT';
         byMethodMap[m] = (byMethodMap[m] || 0) + Number(p.amount || 0);
       });
-      const methodSlices = Object.entries(byMethodMap).map(([label, value]) => ({ label, value: Math.round(value) }));
+      if (dbPosSales > 0 && recentPayments.length === 0) {
+        byMethodMap['Caisse POS'] = (byMethodMap['Caisse POS'] || 0) + dbPosSales;
+      }
+      const methodSlices = Object.entries(byMethodMap)
+        .filter(([, value]) => value > 0)
+        .map(([label, value]) => ({ label, value: Math.round(value) }));
+
+      const trendPoints =
+        recentMovements.length > 0
+          ? recentMovements
+              .slice(0, 6)
+              .reverse()
+              .map((m, i) => ({
+                label: m.description ? m.description.slice(0, 14) : `${m.type} #${i + 1}`,
+                value: Number(m.amount || 0),
+              }))
+          : txSys
+              .slice(0, 6)
+              .reverse()
+              .map((t: any, i: number) => ({
+                label: t.reference || `Op #${i + 1}`,
+                value: Number(t.amount ?? t.amountTnd ?? 0),
+              }));
+
+      const totalSettledOps = paySys.length + (dbPosSales > 0 ? 1 : 0) + (Number(paymentsAgg._sum.amount || 0) > 0 ? 1 : 0);
+      const settledNumerator =
+        paySys.filter((p: any) => p.status === 'PAID' || p.status === 'ENCAISSE').length +
+        (dbPosSales > 0 ? 1 : 0) +
+        (Number(paymentsAgg._sum.amount || 0) > 0 ? 1 : 0);
 
       return {
         section: key,
@@ -3506,18 +3950,13 @@ export class StorefrontCmsService {
         },
         charts: {
           cashflowCompare: [
-            { label: 'Encaissements', primary: Math.round(sysInflow + Number(paymentsAgg._sum.amount || 0)), secondary: 0 },
-            { label: 'Décaissements', primary: 0, secondary: Math.round(sysOutflow) },
+            { label: 'Encaissements', primary: Math.round(totalInflows), secondary: 0 },
+            { label: 'Décaissements', primary: 0, secondary: Math.round(totalOutflows) },
             { label: 'Règlements Validés', primary: Math.round(combinedPayments), secondary: 0 },
           ],
-          methodSlices: methodSlices.length > 0 ? methodSlices : [{ label: 'Espèces', value: Math.round(combinedPayments) || 0 }],
-          trendPoints: (txSys.slice(0, 6).reverse()).map((t: any, i: number) => ({
-            label: t.reference || `Op #${i + 1}`,
-            value: Number(t.amount || 0),
-          })),
-          settlementRate: paySys.length > 0
-            ? Math.round((paySys.filter((p: any) => p.status === 'PAID' || p.status === 'ENCAISSE').length / paySys.length) * 100)
-            : 100,
+          methodSlices,
+          trendPoints,
+          settlementRate: totalSettledOps > 0 ? Math.round((settledNumerator / totalSettledOps) * 100) : 0,
         },
         lists: {
           recentMovements: recentMovements.map((m) => ({ ...m, amount: Number(m.amount || 0) })),
@@ -3575,7 +4014,7 @@ export class StorefrontCmsService {
             primary: Math.round(Number(o.totalHt || 0)),
             secondary: Math.round(Number(o.totalTtc || 0) - Number(o.totalHt || 0)),
           })),
-          receiptRate: Math.round((brValidated / Math.max(1, poCount)) * 100),
+          receiptRate: poCount > 0 ? Math.round((brValidated / poCount) * 100) : 0,
         },
         lists: {
           recentSuppliers: recentSuppliers.map((s) => ({
@@ -3624,7 +4063,7 @@ export class StorefrontCmsService {
         unit: 'pcs',
       }));
       const totalStockCount = await this.prisma.stock.count();
-      const healthyRate = Math.round(((totalStockCount - lowStockCount) / Math.max(1, totalStockCount)) * 100);
+      const healthyRate = totalStockCount > 0 ? Math.round(((totalStockCount - lowStockCount) / totalStockCount) * 100) : 0;
 
       return {
         section: key,
@@ -3697,14 +4136,15 @@ export class StorefrontCmsService {
             value: sh.warehouse?._count?.stock || 0,
             unit: 'réfs',
           })),
-          posOrderSlices: posByStatus.length > 0
-            ? posByStatus.map((g) => ({ label: g.status, value: g._count }))
-            : [{ label: 'Prêt à encaisser', value: registersCount || 1 }],
+          posOrderSlices: posByStatus.map((g) => ({ label: g.status, value: g._count })),
           posOrderTrend: recentPosOrders.slice().reverse().map((o) => ({
             label: o.reference,
             value: Number(o.totalAmount || 0),
           })),
-          readinessRate: Math.round(((showrooms.filter((s) => s.isActive).length) / Math.max(1, showrooms.length)) * 100),
+          readinessRate:
+            showrooms.length > 0
+              ? Math.round((showrooms.filter((s) => s.isActive).length / showrooms.length) * 100)
+              : 0,
         },
         lists: {
           showrooms: showrooms.map((s) => ({ id: s.id, name: s.name, code: s.code, address: s.address, isActive: s.isActive })),
@@ -3746,7 +4186,7 @@ export class StorefrontCmsService {
           select: { id: true, name: true, slug: true, metaTitle: true, metaDesc: true },
         }),
       ]);
-      const curatedList = this.parseJsonSetting<any[]>(curatedRow?.value, DEFAULT_TESTIMONIALS);
+      const curatedList = this.parseJsonSetting<any[]>(curatedRow?.value, []);
       const totalViews = Number(prodInteractions._sum.viewCount || 0);
       const totalLikes = Number(prodInteractions._sum.likeCount || 0);
       const totalDislikes = Number(prodInteractions._sum.dislikeCount || 0);
@@ -3775,7 +4215,7 @@ export class StorefrontCmsService {
             { label: 'Réactions', primary: totalLikes, secondary: totalDislikes },
             { label: 'Abonnés / Témoignages', primary: newsletterCount, secondary: Array.isArray(curatedList) ? curatedList.length : 0 },
           ],
-          approvalScore: reviewsTotal > 0 ? Math.round((reviewsApproved / reviewsTotal) * 100) : 100,
+          approvalScore: reviewsTotal > 0 ? Math.round((reviewsApproved / reviewsTotal) * 100) : 0,
         },
         lists: { recentProducts },
       };
@@ -3815,7 +4255,7 @@ export class StorefrontCmsService {
             { label: 'Modèles Email', value: emailTemplatesCount },
             { label: 'Rôles Actifs', value: rolesCount },
           ],
-          securityCoverage: rolesCount > 0 ? 100 : 80,
+          securityCoverage: rolesCount > 0 && permissionsCount > 0 ? 100 : 0,
         },
         lists: { recentAudits },
       };
@@ -3881,7 +4321,7 @@ export class StorefrontCmsService {
           label: o.reference,
           value: Number(o.totalAmount || 0),
         })),
-        fulfillmentRate: Math.round(((ordersCount - cancelledOrders) / Math.max(1, ordersCount)) * 100),
+        fulfillmentRate: ordersCount > 0 ? Math.round(((ordersCount - cancelledOrders) / ordersCount) * 100) : 0,
       },
       recentOrders: recentOrders.map((o) => ({
         id: o.id,
@@ -4296,497 +4736,29 @@ export class StorefrontCmsService {
         { key: '/dashboard/root/visibility', label: 'Visibilité des vues', section: 'Système & CMS', visibility: 'PRIVATE' },
       ];
     }
-    if (key === 'purchaseOrders') {
-      return [
-        {
-          id: 'po-1',
-          orderNumber: 'BC-2026-0045',
-          supplierName: 'Comptoir Tunisien de l’Électroménager (CTE)',
-          warehouseName: 'Dépôt Central Mahdia (Quai A)',
-          totalHt: 28400,
-          totalTtc: 33796,
-          itemsCount: 24,
-          status: 'CONFIRMED',
-          expectedDeliveryDate: '2026-11-22',
-          notes: 'Livraison prioritaire gamme cuisson & airfryers.',
-          items: [
-            { sku: 'RYL-AF85', name: 'Airfryer Double Tiroir 8.5L 2400W', quantity: 14, unitPriceHt: 1100, taxRate: 19 },
-            { sku: 'RYL-FOUR60', name: 'Four Encastrable Chaleur Tournante 60cm', quantity: 10, unitPriceHt: 1300, taxRate: 19 },
-          ],
-          createdAt: '2026-11-15T14:30:00Z',
-        },
-        {
-          id: 'po-2',
-          orderNumber: 'BC-2026-0044',
-          supplierName: 'Distribution Moderne d’Électroménager (DME)',
-          warehouseName: 'Showroom Tunis Lac 2',
-          totalHt: 14200,
-          totalTtc: 16898,
-          itemsCount: 12,
-          status: 'COMPLETED',
-          expectedDeliveryDate: '2026-11-14',
-          notes: 'Réceptionnée intégralement.',
-          items: [
-            { sku: 'RYL-PET18', name: 'Robot Pétrin Professionnel 1800W', quantity: 12, unitPriceHt: 1183.333, taxRate: 19 },
-          ],
-          createdAt: '2026-11-08T10:00:00Z',
-        },
-      ];
-    }
-    if (key === 'purchaseReceipts') {
-      return [
-        {
-          id: 'br-1',
-          receiptNumber: 'BR-2026-0038',
-          purchaseOrderRef: 'BC-2026-0045',
-          supplierName: 'Comptoir Tunisien de l’Électroménager (CTE)',
-          warehouseName: 'Dépôt Central Mahdia (Quai A)',
-          supplierDeliveryNoteNumber: 'BL-CTE-9921',
-          receivedQuantity: 24,
-          expectedQuantity: 24,
-          discrepancyCount: 0,
-          status: 'VERIFIED',
-          receivedAt: '2026-11-16T09:30:00Z',
-          notes: 'Contrôle quai conforme, scellés intacts.',
-          items: [
-            { sku: 'RYL-AF85', name: 'Airfryer Double Tiroir 8.5L 2400W', expectedQty: 14, receivedQty: 14, unitCostHt: 1100 },
-            { sku: 'RYL-FOUR60', name: 'Four Encastrable Chaleur Tournante 60cm', expectedQty: 10, receivedQty: 10, unitCostHt: 1300 },
-          ],
-        },
-      ];
+    if (key === 'purchaseOrders' || key === 'purchaseReceipts') {
+      return [];
     }
     return {};
   }
 
   private getExtendedSysConfigDefault(key: string) {
-    if (key === 'treasuryTransactions') {
-      return [
-        {
-          id: 'tx-1',
-          reference: 'TX-2026-0891',
-          type: 'INFLOW',
-          method: 'CARD',
-          amount: 1450.0,
-          label: 'Règlement ClicToPay Commande #CMD-2026-0042',
-          account: 'Compte BIAT E-Commerce',
-          operator: 'Passerelle SMT',
-          createdAt: '2026-11-16T10:45:00Z',
-        },
-        {
-          id: 'tx-2',
-          reference: 'TX-2026-0890',
-          type: 'INFLOW',
-          method: 'CASH',
-          amount: 850.0,
-          label: 'Encaissement Caisse Showroom Lac 2 (Vente directe)',
-          account: 'Caisse Principale Lac 2',
-          operator: 'Karim Mejri',
-          createdAt: '2026-11-16T10:15:00Z',
-        },
-        {
-          id: 'tx-3',
-          reference: 'TX-2026-0889',
-          type: 'OUTFLOW',
-          method: 'TRANSFER',
-          amount: 12400.0,
-          label: 'Règlement Facture Fournisseur CTE (Acompte 30%)',
-          account: 'Compte Attijari Central',
-          operator: 'Hichem Bouazizi',
-          createdAt: '2026-11-15T15:30:00Z',
-        },
-        {
-          id: 'tx-4',
-          reference: 'TX-2026-0888',
-          type: 'INFLOW',
-          method: 'CHECK',
-          amount: 3200.0,
-          label: 'Chèque Acompte Cuisine Client B2B LuxImmo',
-          account: 'Portefeuille Chèques à Encaisser',
-          operator: 'Tarak Jebali',
-          createdAt: '2026-11-15T11:20:00Z',
-        },
-      ];
-    }
-    if (key === 'treasuryPayments') {
-      return [
-        {
-          id: 'pay-1',
-          reference: 'REG-2026-0120',
-          instrumentType: 'CHECK',
-          checkNumber: 'CHQ-8829102',
-          bankName: 'BIAT Agence Lac 2',
-          emitterName: 'Société Immobilière LuxHome',
-          amount: 5400.0,
-          dueDate: '2026-11-30',
-          status: 'IN_PORTFOLIO',
-          notes: 'Acompte 50% équipement 2 appartements témoins',
-          createdAt: '2026-11-15T10:00:00Z',
-        },
-        {
-          id: 'pay-2',
-          reference: 'REG-2026-0119',
-          instrumentType: 'CHECK',
-          checkNumber: 'CHQ-4491021',
-          bankName: 'Attijari Bank Ennasr',
-          emitterName: 'Dr. Mehdi Zouari',
-          amount: 2800.0,
-          dueDate: '2026-11-20',
-          status: 'DEPOSITED',
-          notes: 'Bordereau de remise N° 88201',
-          createdAt: '2026-11-10T09:30:00Z',
-        },
-        {
-          id: 'pay-3',
-          reference: 'REG-2026-0118',
-          instrumentType: 'BILL',
-          checkNumber: 'TRT-99201',
-          bankName: 'Amen Bank Sousse',
-          emitterName: 'Hôtel Les Palmiers',
-          amount: 8900.0,
-          dueDate: '2026-12-15',
-          status: 'IN_PORTFOLIO',
-          notes: 'Traite acceptée à 60 jours',
-          createdAt: '2026-11-05T14:00:00Z',
-        },
-        {
-          id: 'pay-4',
-          reference: 'REG-2026-0117',
-          instrumentType: 'CHECK',
-          checkNumber: 'CHQ-1102934',
-          bankName: 'BH Bank Ariana',
-          emitterName: 'Particulier Foued K.',
-          amount: 1200.0,
-          dueDate: '2026-11-01',
-          status: 'REJECTED',
-          notes: 'Motif : Provision insuffisante — En cours de régularisation',
-          createdAt: '2026-10-25T11:00:00Z',
-        },
-      ];
-    }
-    if (key === 'systemFailures') {
-      return [
-        {
-          id: 'fail-1',
-          errorCode: 'ERR_SMT_GATEWAY_TIMEOUT',
-          statusCode: 504,
-          service: 'Payment Service (ClicToPay SMT)',
-          endpoint: 'POST /api/v1/payments/clictopay/verify',
-          errorMessage: 'Gateway connection timed out after 10000ms waiting for SMT terminal response.',
-          stackTrace:
-            'Error: Gateway timeout at PaymentService.verify (payment.service.ts:142:19)\n    at processTicksAndRejections (node:internal/process/task_queues:95:5)',
-          ipAddress: '197.3.11.20',
-          occurredAt: '2026-11-16T10:14:22Z',
-        },
-        {
-          id: 'fail-2',
-          errorCode: 'ERR_MAIL_REPLAY_FAILED',
-          statusCode: 500,
-          service: 'SMTP Mailer Service',
-          endpoint: 'POST /api/v1/community/contacts/reply',
-          errorMessage: 'SMTP response code 451: Temporary local problem during RCPT TO handshake.',
-          stackTrace: 'Error: SMTP 451 at SmtpTransport.sendMail (smtp.transport.ts:88:12)',
-          ipAddress: '127.0.0.1',
-          occurredAt: '2026-11-15T16:02:10Z',
-        },
-      ];
-    }
-    if (key === 'stockOuts') {
-      return [
-        {
-          id: 'so-001',
-          reference: 'BS-2026-001',
-          warehouseName: 'Entrepôt Central Principal',
-          destinationType: 'CUSTOMER_DELIVERY',
-          destinationReference: '#CMD-20261119-3042',
-          destinationRecipient: 'Amira Trabelsi (Sousse)',
-          status: 'PICKING',
-          stockApplied: false,
-          operatorName: 'Tarek Cherif (Magasinier)',
-          totalPieces: 2,
-          packageCount: 1,
-          createdAt: '2026-11-19T14:30:00Z',
-          dispatchedAt: null,
-          items: [
-            { name: 'Aspirateur Balai Florence 2000W - Orange', sku: 'SVC-201OR-STD', locationCode: 'WH-CENTRAL/A1', quantity: 2 },
-          ],
-        },
-        {
-          id: 'so-002',
-          reference: 'BS-2026-002',
-          warehouseName: 'Entrepôt Central Principal',
-          destinationType: 'CUSTOMER_DELIVERY',
-          destinationReference: '#CMD-20261120-5984',
-          destinationRecipient: 'Ahmed Boukadida (Kalaa Sghira)',
-          status: 'PICKING',
-          stockApplied: false,
-          operatorName: 'Sami Bouzidi (Magasinier)',
-          totalPieces: 2,
-          packageCount: 2,
-          createdAt: '2026-11-20T09:15:00Z',
-          dispatchedAt: null,
-          items: [
-            { name: 'Cuiseur Vapeur Multifonction DSP- 2 Etages- 300 W', sku: 'KA5019-STD', locationCode: 'WH-CENTRAL/B2', quantity: 1 },
-            { name: 'Friteuse Electrique Florence 2,5L - 1200W', sku: 'HK490-STD', locationCode: 'WH-CENTRAL/B3', quantity: 1 },
-          ],
-        },
-      ];
-    }
-    if (key === 'deliverySlips') {
-      return [
-        {
-          id: 'del-001',
-          trackingNumber: 'LIV-2026-001',
-          orderReference: '#CMD-20261119-3042',
-          customerName: 'Amira Trabelsi',
-          customerPhone: '+216 98 123 456',
-          deliveryAddress: 'Rond point Kantaoui',
-          city: 'Sousse',
-          carrierType: 'INTERNAL_FLEET',
-          carrierName: 'Flotte Interne Royal (Camion 01)',
-          driverName: 'Férid Ben Romdhane',
-          driverPhone: '+216 22 987 654',
-          status: 'PREPARING',
-          stockApplied: false,
-          codAmountTnd: 159,
-          isCodCollected: false,
-          packageCount: 1,
-          weightKg: 8,
-          createdAt: '2026-11-19T16:00:00Z',
-          estimatedDeliveryDate: '2026-11-21',
-          items: [{ name: 'Aspirateur Balai Florence 2000W - Orange', sku: 'SVC-201OR-STD', quantity: 1 }],
-        },
-        {
-          id: 'del-002',
-          trackingNumber: 'LIV-2026-002',
-          orderReference: '#CMD-20261120-5984',
-          customerName: 'Ahmed Boukadida',
-          customerPhone: '99630983',
-          deliveryAddress: '46 Rue Farhat Hached',
-          city: 'Kalaa Sghira',
-          carrierType: 'PARTNER_EXPRESS',
-          carrierName: 'Aramex Express Tunisie',
-          driverName: 'Service Colis Aramex',
-          driverPhone: '+216 71 111 222',
-          status: 'PREPARING',
-          stockApplied: false,
-          codAmountTnd: 228,
-          isCodCollected: false,
-          packageCount: 2,
-          weightKg: 11,
-          createdAt: '2026-11-20T08:30:00Z',
-          estimatedDeliveryDate: '2026-11-22',
-          items: [
-            { name: 'Cuiseur Vapeur Multifonction DSP- 2 Etages- 300 W', sku: 'KA5019-STD', quantity: 1 },
-            { name: 'Friteuse Electrique Florence 2,5L - 1200W', sku: 'HK490-STD', quantity: 1 },
-          ],
-        },
-      ];
-    }
-    if (key === 'invoicesList') {
-      return [
-        {
-          id: 'inv-001',
-          invoiceNumber: 'FACT-2026-001',
-          orderReference: '#CMD-20261119-3042',
-          customerName: 'Amira Trabelsi',
-          customerType: 'INDIVIDUAL',
-          customerCin: '08123456',
-          customerAddress: 'Rond point Kantaoui',
-          customerCity: 'Sousse',
-          type: 'STANDARD',
-          status: 'UNPAID',
-          stockApplied: false,
-          totalHt: 133.613,
-          totalTva: 25.387,
-          fiscalStampTnd: 1.0,
-          totalTtc: 160,
-          createdAt: '2026-11-19T23:55:00Z',
-          dueDate: '2026-11-25',
-          paidAt: null,
-          lines: [
-            {
-              id: 'il-1',
-              name: 'Aspirateur Balai Florence 2000W - Orange',
-              sku: 'SVC-201OR-STD',
-              quantity: 1,
-              unitPriceHt: 133.613,
-              tvaRate: 19,
-              totalHt: 133.613,
-              totalTtc: 159,
-            },
-          ],
-        },
-      ];
-    }
-    if (key === 'stockIns') {
-      return [
-        {
-          id: 'be-1',
-          receiptNumber: 'BE-2026-0042',
-          poNumber: 'BC-2026-0045',
-          supplierId: 'sup-cte',
-          supplierName: 'Comptoir Tunisien de l’Électroménager (CTE)',
-          supplierCode: 'FRN-CTE-01',
-          supplierType: 'COMPANY',
-          supplierTaxIdOrCin: '1492810/A/M/000',
-          warehouseId: 'wh-central',
-          warehouseName: 'Entrepôt Central Principal',
-          warehouseCode: 'WH-CENTRAL',
-          targetStorageLevel: 'WAREHOUSE_DIRECT',
-          targetLocationDetail: 'Entrepôt Central Principal (Zone Quai A)',
-          status: 'CONFIRMED',
-          totalHt: 3150,
-          totalTtc: 3748.5,
-          receptionDate: '2026-11-18T10:30:00Z',
-          receivedBy: 'Tarek Cherif',
-          stockApplied: true,
-          notes: 'Réception conforme et mise en stock.',
-          items: [
-            { id: 'bei-1', sku: 'SVC-201OR-STD', name: 'Aspirateur Balai Florence 2000W - Orange', orderedQty: 15, receivedQty: 15, unitPriceHt: 140, taxRate: 19, storageLocation: 'WH-CENTRAL/A1' },
-            { id: 'bei-2', sku: 'KA5019-STD', name: 'Cuiseur Vapeur Multifonction DSP- 2 Etages- 300 W', orderedQty: 10, receivedQty: 10, unitPriceHt: 105, taxRate: 19, storageLocation: 'WH-CENTRAL/B2' },
-          ],
-          attachedDocuments: [],
-          createdAt: '2026-11-18T10:30:00Z',
-          updatedAt: '2026-11-18T10:45:00Z',
-        },
-      ];
-    }
-    if (key === 'inventoryDocuments') {
-      return [
-        {
-          id: 'invd-1',
-          reference: 'INV-2026-001',
-          warehouseId: 'wh-central',
-          warehouseName: 'Entrepôt Central Principal',
-          inventoryType: 'CYCLIC',
-          scopeType: 'FULL_WAREHOUSE',
-          scopeTarget: 'Entrepôt Central & Showroom Marsa',
-          status: 'COMPLETED',
-          managerName: 'Mohamed Zitouni (ROOT)',
-          totalLines: 2,
-          totalCountedLines: 2,
-          netDeltaQty: 0,
-          financialImpactTnd: 0,
-          createdAt: '2026-11-19T09:00:00Z',
-          closedAt: '2026-11-19T12:00:00Z',
-          lines: [
-            { id: 'il-1', articleId: 'SVC-201OR-STD', sku: 'SVC-201OR-STD', name: 'Aspirateur Balai Florence 2000W - Orange', categoryName: 'Électroménager', locationCode: 'WH-CENTRAL/A1', unitCostTnd: 165, theoreticalQty: 120, countedQty: 120, notes: 'Conforme au comptage' },
-            { id: 'il-2', articleId: 'HK490-STD', sku: 'HK490-STD', name: 'Friteuse Electrique Florence 2,5L - 1200W', categoryName: 'Cuisine', locationCode: 'WH-CENTRAL/B3', unitCostTnd: 140, theoreticalQty: 130, countedQty: 130, notes: 'Conforme au comptage' },
-          ],
-        },
-      ];
-    }
-    if (key === 'customerReturns') {
-      return [
-        {
-          id: 'ret-1',
-          returnNumber: 'RET-2026-0001',
-          deliveryNumber: 'LIV-2026-001',
-          orderNumber: 'CMD-20261119-3042',
-          customerName: 'Amira Trabelsi',
-          reason: 'CUSTOMER_CHANGE_OF_MIND',
-          action: 'VOUCHER',
-          refundAmount: 159,
-          warehouseDestination: 'Entrepôt Central Principal',
-          status: 'INSPECTED',
-          stockRestored: false,
-          items: [{ sku: 'SVC-201OR-STD', name: 'Aspirateur Balai Florence 2000W - Orange', quantity: 1 }],
-          createdAt: '2026-11-20T10:00:00Z',
-        },
-      ];
-    }
-    if (key === 'treasuryAccounts') {
-      return [
-        {
-          id: 'tr-001',
-          name: 'Compte Courant Principal BIAT',
-          code: 'BNQ-BIAT-01',
-          accountType: 'BANK',
-          institution: 'BIAT Tunisie',
-          accountNumber: 'RIB 08 045 0001234567890 42',
-          showroomOrDepot: 'Direction Générale Mahdia',
-          currentBalanceTnd: 148520,
-          initialBalanceTnd: 100000,
-          managerName: 'Direction Financière',
-          status: 'OPEN',
-          isActive: true,
-          lastMovementAmountTnd: 1450,
-          lastMovementDate: '2026-11-20T10:00:00Z',
-          createdAt: '2026-11-01T08:00:00Z',
-        },
-        {
-          id: 'tr-002',
-          name: 'Caisse Principale Showroom La Marsa',
-          code: 'CSH-MARSA-01',
-          accountType: 'CASH_REGISTER',
-          institution: 'Showroom La Marsa',
-          showroomOrDepot: 'POS-MARSA',
-          currentBalanceTnd: 3450,
-          initialBalanceTnd: 500,
-          managerName: 'Caissier Showroom',
-          status: 'OPEN',
-          isActive: true,
-          lastMovementAmountTnd: 228,
-          lastMovementDate: '2026-11-20T09:15:00Z',
-          createdAt: '2026-11-01T08:00:00Z',
-        },
-      ];
-    }
-    if (key === 'accountingEntries') {
-      return [
-        {
-          id: 'ecr-1',
-          entryNumber: 'ECR-2026-0001',
-          journalType: 'VENTES',
-          accountCode: '411000',
-          accountLabel: 'Clients Nationaux',
-          pieceReference: 'FACT-2026-001',
-          label: 'Facture vente client Amira Trabelsi',
-          debitTnd: 160,
-          creditTnd: 0,
-          entryDate: '2026-11-19',
-          createdAt: '2026-11-19T23:55:00Z',
-        },
-        {
-          id: 'ecr-2',
-          entryNumber: 'ECR-2026-0002',
-          journalType: 'VENTES',
-          accountCode: '707100',
-          accountLabel: 'Ventes Électroménager',
-          pieceReference: 'FACT-2026-001',
-          label: 'Produit net des ventes HT',
-          debitTnd: 0,
-          creditTnd: 133.613,
-          entryDate: '2026-11-19',
-          createdAt: '2026-11-19T23:55:00Z',
-        },
-        {
-          id: 'ecr-3',
-          entryNumber: 'ECR-2026-0003',
-          journalType: 'VENTES',
-          accountCode: '436710',
-          accountLabel: 'TVA Collectée (19%)',
-          pieceReference: 'FACT-2026-001',
-          label: 'TVA exigible sur facturation',
-          debitTnd: 0,
-          creditTnd: 25.387,
-          entryDate: '2026-11-19',
-          createdAt: '2026-11-19T23:55:00Z',
-        },
-        {
-          id: 'ecr-4',
-          entryNumber: 'ECR-2026-0004',
-          journalType: 'VENTES',
-          accountCode: '436790',
-          accountLabel: 'Droit de Timbre Fiscal',
-          pieceReference: 'FACT-2026-001',
-          label: 'Timbre fiscal 1.000 DT',
-          debitTnd: 0,
-          creditTnd: 1.0,
-          entryDate: '2026-11-19',
-          createdAt: '2026-11-19T23:55:00Z',
-        },
-      ];
+    if (
+      [
+        'treasuryTransactions',
+        'treasuryPayments',
+        'systemFailures',
+        'stockOuts',
+        'deliverySlips',
+        'invoicesList',
+        'stockIns',
+        'inventoryDocuments',
+        'customerReturns',
+        'treasuryAccounts',
+        'accountingEntries',
+      ].includes(key)
+    ) {
+      return [];
     }
     if (key === 'paymentMethods') {
       return [

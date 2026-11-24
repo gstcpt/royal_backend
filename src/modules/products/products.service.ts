@@ -88,10 +88,14 @@ export class ProductsService {
               stock: { select: { warehouseId: true, physicalQty: true, reservedQty: true } },
             },
           },
+          reviews: {
+            where: { status: 'APPROVED' },
+            select: { rating: true },
+          },
           _count: {
             select: {
               variants: true,
-              reviews: true,
+              reviews: { where: { status: 'APPROVED' } },
             },
           },
         },
@@ -108,6 +112,16 @@ export class ProductsService {
           ),
         0,
       );
+      const approvedReviews = Array.isArray((p as any).reviews) ? (p as any).reviews : [];
+      const ratingAvg =
+        approvedReviews.length > 0
+          ? Number(
+              (
+                approvedReviews.reduce((acc: number, r: any) => acc + Number(r.rating || 0), 0) /
+                approvedReviews.length
+              ).toFixed(1),
+            )
+          : 0;
       return {
         id: p.id,
         sku: p.sku,
@@ -140,6 +154,7 @@ export class ProductsService {
         availableStock: totalStock,
         variantsCount: p._count.variants,
         reviewsCount: p._count.reviews,
+        rating: ratingAvg,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
         createdBy: p.createdBy,
@@ -350,13 +365,18 @@ export class ProductsService {
               stock: { select: { warehouseId: true, physicalQty: true, reservedQty: true } },
             },
           },
+          reviews: {
+            where: { status: 'APPROVED' },
+            select: { rating: true },
+          },
           _count: {
-            select: { reviews: true },
+            select: { reviews: { where: { status: 'APPROVED' } } },
           },
         },
       }),
     ]);
 
+    const nowMs = Date.now();
     const formatted = products.map((p) => {
       const primaryImage =
         p.images.find((img) => img.isPrimary)?.url ||
@@ -382,6 +402,17 @@ export class ProductsService {
           ),
         0,
       );
+      const approvedReviews = Array.isArray((p as any).reviews) ? (p as any).reviews : [];
+      const ratingAvg =
+        approvedReviews.length > 0
+          ? Number(
+              (
+                approvedReviews.reduce((acc: number, r: any) => acc + Number(r.rating || 0), 0) /
+                approvedReviews.length
+              ).toFixed(1),
+            )
+          : 0;
+      const ageDays = (nowMs - new Date(p.createdAt).getTime()) / 86400000;
 
       return {
         id: p.id,
@@ -396,8 +427,8 @@ export class ProductsService {
         discountPercent,
         discountPercentage: discountPercent,
         isFeatured: p.isFeatured,
-        isNewArrival: true,
-        rating: 4.9,
+        isNewArrival: ageDays <= 30,
+        rating: ratingAvg,
         dimensionsJson: p.dimensionsJson,
         primaryImage,
         images: gallery.length > 0 ? gallery : [primaryImage],
@@ -697,8 +728,12 @@ export class ProductsService {
             },
           },
         },
+        reviews: {
+          where: { status: 'APPROVED' },
+          select: { rating: true },
+        },
         _count: {
-          select: { reviews: true },
+          select: { reviews: { where: { status: 'APPROVED' } } },
         },
       },
     });
@@ -713,6 +748,17 @@ export class ProductsService {
       data: { viewCount: { increment: 1 } },
     }).catch(() => null);
 
+    const approvedReviews = Array.isArray((product as any).reviews) ? (product as any).reviews : [];
+    const ratingAvg =
+      approvedReviews.length > 0
+        ? Number(
+            (
+              approvedReviews.reduce((acc: number, r: any) => acc + Number(r.rating || 0), 0) /
+              approvedReviews.length
+            ).toFixed(1),
+          )
+        : 0;
+
     return {
       ...product,
       basePrice: Number(product.basePrice),
@@ -720,6 +766,8 @@ export class ProductsService {
       discountPrice: product.discountPrice ? Number(product.discountPrice) : null,
       taxRate: Number(product.taxRate),
       weight: product.weight ? Number(product.weight) : null,
+      rating: ratingAvg,
+      reviewsCount: (product as any)._count?.reviews ?? approvedReviews.length,
     };
   }
 

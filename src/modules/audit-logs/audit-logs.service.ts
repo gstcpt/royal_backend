@@ -231,7 +231,7 @@ export class AuditLogsService {
       totalLogs,
       todayLogs,
       criticalActions,
-      uniqueActorsCount: uniqueActors.length || 1,
+      uniqueActorsCount: uniqueActors.length,
       actions: distinctActions.map((a) => a.action).filter(Boolean).sort(),
       resourceTypes: distinctResources.map((r) => r.resourceType).filter(Boolean).sort(),
       actors: uniqueActors.map((a) => a.actorEmail).filter(Boolean).sort(),

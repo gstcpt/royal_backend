@@ -401,3 +401,30 @@ export class CarrierWebhookDto {
   @ApiPropertyOptional() @IsOptional() @IsString() note?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() codCollected?: boolean;
 }
+
+export class TrackTelemetryDto {
+  @ApiProperty() @IsString() sessionHash: string;
+
+  @ApiProperty({
+    enum: ['PAGE_VIEW', 'PAGE_LEAVE', 'PRODUCT_VIEW', 'ADD_TO_CART', 'BEGIN_CHECKOUT', 'PURCHASE'],
+  })
+  @IsIn(['PAGE_VIEW', 'PAGE_LEAVE', 'PRODUCT_VIEW', 'ADD_TO_CART', 'BEGIN_CHECKOUT', 'PURCHASE'])
+  eventType:
+    | 'PAGE_VIEW'
+    | 'PAGE_LEAVE'
+    | 'PRODUCT_VIEW'
+    | 'ADD_TO_CART'
+    | 'BEGIN_CHECKOUT'
+    | 'PURCHASE';
+
+  @ApiPropertyOptional() @IsOptional() @IsString() pagePath?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() pageTitle?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() referrer?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() utmSource?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() utmMedium?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() utmCampaign?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() deviceType?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() browserFamily?: string;
+  @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsNumber() @Min(0) durationSeconds?: number;
+  @ApiPropertyOptional() @IsOptional() @IsObject() metadata?: Record<string, any>;
+}

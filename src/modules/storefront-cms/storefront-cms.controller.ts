@@ -37,6 +37,7 @@ import {
   TestMediaStorageDto,
   ToggleReactionDto,
   ToggleWishlistDto,
+  TrackTelemetryDto,
   UpdateCmsIdentityDto,
   UpdateCmsLayoutDto,
   UpdateCmsPageDto,
@@ -195,6 +196,14 @@ export class StorefrontCmsController {
     return this.service.subscribeNewsletter(dto);
   }
 
+  @Public()
+  @Post('telemetry/track')
+  @ApiOperation({ summary: 'Enregistrer un événement réel de navigation ou conversion Storefront (TrafficEvent)' })
+  trackTelemetry(@Body() dto: TrackTelemetryDto, @Req() req?: any) {
+    const ua = String(req?.headers?.['user-agent'] || '');
+    return this.service.recordTelemetryEvent(dto, ua);
+  }
+
   @Get('dashboard-kpis')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -284,6 +293,15 @@ export class StorefrontCmsController {
   @ApiOperation({ summary: 'Télémétrie complète des interactions clients (likes, dislikes, favoris, avis, vues)' })
   getInteractionsReport() {
     return this.service.getInteractionsReport();
+  }
+
+  @Get('treasury-report')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('treasury:read|reports:read|users:read')
+  @ApiOperation({ summary: 'Rapport temps réel des caisses, encaissements, décaissements et couverture trésorerie' })
+  getTreasuryReport() {
+    return this.service.getTreasuryReport();
   }
 
   @Get('admin/reviews')
