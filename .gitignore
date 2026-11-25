@@ -6,12 +6,11 @@ node_modules/
 /dist/
 /build/
 
-# Environment files
+# Environment files (keep *.example templates trackable, never real secrets)
 .env
-.env.local
-.env.neon
-.env.vercel
-.env.*.local
+.env.*
+!.env.example
+!.env.vps.example
 
 # Uploads & Logs
 /uploads/

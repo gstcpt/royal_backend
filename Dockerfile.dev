@@ -1,8 +1,13 @@
+# ==============================================================================
+# ROYAL BACKEND — LOCAL DOCKER DEVELOPMENT DOCKERFILE
+# ==============================================================================
+
 FROM node:24-alpine
 
 WORKDIR /app
 RUN npm install -g pnpm@10.15.0
 
+# Copy manifests & Prisma schema first so pnpm install remains cached on code edits
 COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/backend/package.json ./apps/backend/
@@ -19,8 +24,10 @@ RUN pnpm --filter "@royal/shared-types" run build
 RUN pnpm --filter "@royal/shared-validators" run build
 RUN pnpm --filter "@royal/shared-utils" run build
 RUN pnpm --filter backend run prisma:generate
+RUN mkdir -p /app/apps/backend/uploads
 
 WORKDIR /app/apps/backend
+ENV PORT=4000
 EXPOSE 4000
 
 CMD ["pnpm", "dev"]
