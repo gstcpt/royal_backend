@@ -31,6 +31,7 @@ import {
   ModerateReviewDto,
   ReorderFaqDto,
   ReplySupportThreadDto,
+  ResetCmsDefaultsDto,
   SendDeliveryDocumentsDto,
   SmtpTestDto,
   SubscribeNewsletterDto,
@@ -595,8 +596,8 @@ export class StorefrontCmsController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
   @Permissions('settings:update')
-  resetCmsDefaults(@Req() req: any) {
-    return this.service.resetCmsDefaults(req.user?.email);
+  resetCmsDefaults(@Req() req: any, @Body() dto?: ResetCmsDefaultsDto) {
+    return this.service.resetCmsDefaults(req.user?.email, dto?.scope, dto?.viewKey);
   }
 
   @Public()

@@ -89,26 +89,26 @@ const DEFAULT_FOOTER = {
     'Boutique spécialisée en petit et gros électroménager de qualité, arts de la table et équipements culinaires modernes en Tunisie.',
   col1Title: 'À Propos',
   col1Links: [
-    { label: 'À propos de Royal', href: '/about' },
-    { label: 'Nos Showrooms Tunisie', href: '/showrooms' },
-    { label: 'Engagement Qualité', href: '/contact' },
+    { label: 'Accueil Royal', href: '/' },
+    { label: 'Tous nos Articles', href: '/articles' },
+    { label: 'Nos Showrooms Tunisie', href: '/stores' },
   ],
   col2Title: 'Rayons & Articles',
-  col2Links: [
-    { label: 'Tous les Articles', href: '/articles' },
-    { label: 'Nouveautés Catalogue', href: '/articles?sortBy=newest' },
-    { label: 'Promotions TND', href: '/articles?sortBy=promo' },
-    { label: 'Comparateur Produits', href: '/compare' },
-  ],
+  col2Links: [],
   col3Title: 'Informations & Aide',
   col3Links: [
-    { label: 'Suivre ma Commande', href: '/track-order' },
+    { label: 'Contactez-nous', href: '/contact' },
     { label: 'Foire Aux Questions (FAQ)', href: '/faq' },
-    { label: 'Conditions Générales', href: '/terms' },
-    { label: 'Confidentialité & Données', href: '/privacy' },
+    { label: 'Conditions Générales de Vente', href: '/terms' },
+    { label: 'Politique de Confidentialité', href: '/privacy' },
+    { label: 'Suivi de Commande', href: '/track-order' },
   ],
   col4Title: 'Contact & Coordonnées',
   copyrightText: 'Royal — Électro de Maison (Mahdia, Tunisie). Tous droits réservés.',
+  showBrandHeader: true,
+  showNewsletter: true,
+  newsletterTitle: 'Restez Informé de nos Offres & Nouveautés',
+  showSocialLinks: true,
 };
 
 const DEFAULT_VIEWS = {
@@ -381,6 +381,7 @@ export class StorefrontCmsService {
               'cms.heroSlides',
               'cms.testimonials',
               'sys.translations',
+              'sys.generalSettings',
             ],
           },
         },
@@ -453,6 +454,8 @@ export class StorefrontCmsService {
         ? curatedTestimonials.filter((t) => t.isActive !== false)
         : fallbackDbTestimonials;
     const translations = this.parseJsonSetting<any>(map.get('sys.translations'), null);
+    const generalSettings = this.parseJsonSetting<any>(map.get('sys.generalSettings'), {});
+    const identityShowrooms = Array.isArray(identity.showrooms) ? identity.showrooms : [];
 
     const payload = {
       appName: identity.appName || 'Royal',
@@ -460,19 +463,31 @@ export class StorefrontCmsService {
       faviconUrl: identity.faviconUrl || '/icon.png',
       freeShippingThreshold: Number(map.get('shipping.free_threshold') ?? 150),
       standardShippingFee: Number(map.get('shipping.standard_fee') ?? 7),
+      vatStandard: Number(generalSettings?.vatStandard ?? 19),
+      maintenance: {
+        enabled: Boolean(generalSettings?.maintenanceMode),
+        message:
+          String(generalSettings?.maintenanceMessage || '').trim() ||
+          'Notre boutique est momentanément en maintenance technique. Merci de votre patience.',
+      },
       identity: {
         ...identity,
         showrooms:
-          Array.isArray(identity.showrooms) && identity.showrooms.length > 0
-            ? identity.showrooms
-            : activeShowrooms.map((s) => ({
-                id: s.id,
-                name: s.name,
-                city: s.code || 'Tunisie',
-                address: s.address || 'Mahdia 5100, Tunisie',
-                phone: s.phone || identity.phone || '48 091 914',
-                hours: 'Lun–Sam · 09h00 – 19h00',
-              })),
+          activeShowrooms.length > 0
+            ? activeShowrooms.map((s) => {
+                const matchedMeta = identityShowrooms.find(
+                  (is: any) => is.id === s.id || String(is.name || '').toLowerCase() === String(s.name || '').toLowerCase(),
+                );
+                return {
+                  id: s.id,
+                  name: s.name,
+                  city: s.code || matchedMeta?.city || 'Tunisie',
+                  address: s.address || matchedMeta?.address || 'Mahdia 5100, Tunisie',
+                  phone: s.phone || matchedMeta?.phone || identity.phone || '48 091 914',
+                  hours: matchedMeta?.hours || 'Lun–Sam · 09h00 – 19h00',
+                };
+              })
+            : identityShowrooms,
       },
       theme,
       header,
@@ -614,7 +629,7 @@ export class StorefrontCmsService {
         fullName: dto.fullName.trim(),
         email: dto.email?.trim() || null,
         phone: dto.phone?.trim() || null,
-        subject: dto.subject.trim(),
+        subject: (dto.subject || '').trim() || 'Message client',
         message: dto.message.trim(),
         status: 'NEW',
         isRead: false,
@@ -3359,8 +3374,51 @@ export class StorefrontCmsService {
     return this.getPublicConfig();
   }
 
-  async resetCmsDefaults(updatedBy?: string) {
+  async resetCmsDefaults(
+    updatedBy?: string,
+    scope: 'all' | 'layout' | 'view' = 'all',
+    viewKey?: string,
+  ) {
     const snap = this.getDefaultsSnapshot();
+    const defaultViewsMap: Record<string, any> = {
+      home: { ...DEFAULT_VIEWS.home, ...(snap.views?.home || {}) },
+      articles: { ...DEFAULT_VIEWS.articles, ...(snap.views?.articles || {}) },
+      productDetail: { ...DEFAULT_VIEWS.productDetail, ...(snap.views?.productDetail || {}) },
+      contact: { ...DEFAULT_VIEWS.contact, ...(snap.views?.contact || {}) },
+      faq: { ...DEFAULT_VIEWS.faq, ...(snap.views?.faq || {}) },
+      showrooms: { ...DEFAULT_VIEWS.showrooms, ...(snap.views?.showrooms || {}) },
+      terms: { ...DEFAULT_VIEWS.terms, ...(snap.views?.terms || {}) },
+      privacy: { ...DEFAULT_VIEWS.privacy, ...(snap.views?.privacy || {}) },
+    };
+
+    if (scope === 'layout') {
+      await Promise.all([
+        this.upsertSetting('cms.theme', JSON.stringify(snap.theme || DEFAULT_THEME), 'cms', updatedBy),
+        this.upsertSetting('cms.header', JSON.stringify(snap.header || DEFAULT_HEADER), 'cms', updatedBy),
+        this.upsertSetting('cms.footer', JSON.stringify(snap.footer || DEFAULT_FOOTER), 'cms', updatedBy),
+      ]);
+      return this.getPublicConfig();
+    }
+
+    if (scope === 'view' && viewKey) {
+      const resolvedKey = viewKey === 'product-detail' ? 'productDetail' : viewKey;
+      if (resolvedKey in defaultViewsMap) {
+        const current = await this.getPublicConfig();
+        const nextViews = {
+          ...current.views,
+          [resolvedKey]: defaultViewsMap[resolvedKey],
+        };
+        const ops: Array<Promise<any>> = [
+          this.upsertSetting('cms.views', JSON.stringify(nextViews), 'cms', updatedBy),
+        ];
+        if (resolvedKey === 'home') {
+          ops.push(this.upsertSetting('cms.heroSlides', JSON.stringify(snap.heroSlides || []), 'cms', updatedBy));
+        }
+        await Promise.all(ops);
+        return this.getPublicConfig();
+      }
+    }
+
     await Promise.all([
       this.upsertSetting('cms.identity', JSON.stringify(snap.identity || {}), 'cms', updatedBy),
       this.upsertSetting('branding.app_name', snap.identity?.appName || 'Royal', 'branding', updatedBy),
@@ -3369,7 +3427,7 @@ export class StorefrontCmsService {
       this.upsertSetting('cms.theme', JSON.stringify(snap.theme || DEFAULT_THEME), 'cms', updatedBy),
       this.upsertSetting('cms.header', JSON.stringify(snap.header || DEFAULT_HEADER), 'cms', updatedBy),
       this.upsertSetting('cms.footer', JSON.stringify(snap.footer || DEFAULT_FOOTER), 'cms', updatedBy),
-      this.upsertSetting('cms.views', JSON.stringify(snap.views || DEFAULT_VIEWS), 'cms', updatedBy),
+      this.upsertSetting('cms.views', JSON.stringify(defaultViewsMap), 'cms', updatedBy),
       this.upsertSetting('cms.heroSlides', JSON.stringify(snap.heroSlides || []), 'cms', updatedBy),
     ]);
     return this.getPublicConfig();

@@ -31,10 +31,10 @@ export class CreateContactDto {
   @IsString()
   phone?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  @MinLength(2)
-  subject: string;
+  subject?: string;
 
   @ApiProperty()
   @IsString()
@@ -284,6 +284,18 @@ export class UpdateCmsLayoutDto {
   @ApiPropertyOptional() @IsOptional() @IsObject() theme?: Record<string, any>;
   @ApiPropertyOptional() @IsOptional() @IsObject() header?: Record<string, any>;
   @ApiPropertyOptional() @IsOptional() @IsObject() footer?: Record<string, any>;
+}
+
+export class ResetCmsDefaultsDto {
+  @ApiPropertyOptional({ enum: ['all', 'layout', 'view'] })
+  @IsOptional()
+  @IsIn(['all', 'layout', 'view'])
+  scope?: 'all' | 'layout' | 'view';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  viewKey?: string;
 }
 
 export class UpdateCmsViewsDto {
