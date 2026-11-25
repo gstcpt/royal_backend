@@ -284,6 +284,7 @@ export class UpdateCmsLayoutDto {
   @ApiPropertyOptional() @IsOptional() @IsObject() theme?: Record<string, any>;
   @ApiPropertyOptional() @IsOptional() @IsObject() header?: Record<string, any>;
   @ApiPropertyOptional() @IsOptional() @IsObject() footer?: Record<string, any>;
+  @ApiPropertyOptional() @IsOptional() @IsObject() globalCustomCode?: Record<string, any>;
 }
 
 export class ResetCmsDefaultsDto {
@@ -301,6 +302,20 @@ export class ResetCmsDefaultsDto {
 export class UpdateCmsViewsDto {
   @ApiPropertyOptional() @IsOptional() @IsObject() views?: Record<string, any>;
   @ApiPropertyOptional() @IsOptional() @IsArray() heroSlides?: any[];
+}
+
+export class UpsertCustomViewDto {
+  @ApiProperty() @IsString() slug: string;
+  @ApiProperty() @IsString() title: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() subtitle?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() badgeText?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPublished?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() seoTitle?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() seoDescription?: string;
+  @ApiPropertyOptional() @IsOptional() @IsObject() viewStyle?: Record<string, any>;
+  @ApiPropertyOptional() @IsOptional() @IsArray() blocks?: any[];
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() linkToHeader?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsIn(['none', 'col1', 'col2', 'col3']) linkToFooterCol?: 'none' | 'col1' | 'col2' | 'col3';
 }
 
 export class UpsertCuratedTestimonialDto {

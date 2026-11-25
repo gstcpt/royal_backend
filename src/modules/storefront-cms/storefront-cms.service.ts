@@ -54,6 +54,7 @@ import {
   UpdateShippingConfigDto,
   UpdateSupportStatusDto,
   UpsertCuratedTestimonialDto,
+  UpsertCustomViewDto,
   UpsertEmailTemplateDto,
   UpsertFaqDto,
   UpsertShowroomDto,
@@ -95,6 +96,16 @@ const DEFAULT_HEADER = {
   showCompare: true,
   showWishlist: true,
   showTrackOrder: true,
+  showCartButton: true,
+  showAccountButton: true,
+  transparentOnHome: true,
+  navLinks: [
+    { id: 'nav-home', label: 'Accueil', href: '/', i18nKey: 'nav.home', visible: true, highlight: false },
+    { id: 'nav-articles', label: 'Articles', href: '/articles', i18nKey: 'nav.articles', visible: true, highlight: false },
+    { id: 'nav-rays', label: 'Rayons', href: '#rays', type: 'RAYONS_DROPDOWN', i18nKey: 'nav.rays', visible: true, highlight: false },
+    { id: 'nav-promos', label: 'Promotions', href: '/articles?sortBy=promo', i18nKey: 'nav.promos', visible: true, highlight: true },
+  ],
+  elementStyles: {},
 };
 
 const DEFAULT_FOOTER = {
@@ -122,6 +133,12 @@ const DEFAULT_FOOTER = {
   showNewsletter: true,
   newsletterTitle: 'Restez Informé de nos Offres & Nouveautés',
   showSocialLinks: true,
+  elementStyles: {},
+};
+
+const DEFAULT_GLOBAL_CUSTOM_CODE = {
+  customCss: '',
+  customJs: '',
 };
 
 const DEFAULT_VIEWS = {
@@ -142,6 +159,7 @@ const DEFAULT_VIEWS = {
       'featuredVideo',
       'testimonials',
       'newsletter',
+      'bottomPromo',
     ],
     showCategoriesCarousel: true,
     showValueProps: true,
@@ -153,8 +171,13 @@ const DEFAULT_VIEWS = {
     showLifestyleGallery: true,
     showTestimonials: true,
     showNewsletter: true,
+    showBottomPromo: true,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
   },
   articles: {
+    sectionOrder: ['header', 'filters', 'grid', 'actions', 'pagination'],
     defaultColumns: '3',
     defaultItemsPerPage: 12,
     paginationMode: 'PAGINATION' as 'PAGINATION' | 'LOAD_MORE',
@@ -165,8 +188,12 @@ const DEFAULT_VIEWS = {
     showBuyButton: true,
     showLikeDislike: true,
     showSidebarFiltersByDefault: true,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
   },
   productDetail: {
+    sectionOrder: ['breadcrumb', 'gallery', 'purchaseInfo', 'trustBadges', 'tabs', 'related'],
     showReviews: true,
     showRatings: true,
     showSpecs: true,
@@ -179,8 +206,12 @@ const DEFAULT_VIEWS = {
     enableImageAutoplay: true,
     mediaColumnSpan: 7,
     galleryHeightPx: 540,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
   },
   contact: {
+    sectionOrder: ['hero', 'mainGrid', 'map'],
     showMap: true,
     mapHeightPx: 380,
     mapEmbedUrl:
@@ -189,11 +220,18 @@ const DEFAULT_VIEWS = {
     phoneRequired: true,
     emailRequired: false,
     subjectRequired: true,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
   },
   faq: {
+    sectionOrder: ['hero', 'categories', 'questions', 'cta'],
     title: 'Foire Aux Questions',
     subtitle: 'Trouvez rapidement les réponses à vos questions sur la livraison, la garantie et nos produits.',
     showSearch: true,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
   },
   showrooms: {
     enabled: false,
@@ -202,6 +240,9 @@ const DEFAULT_VIEWS = {
     showHours: true,
     showPhone: true,
     sectionOrder: ['hero', 'cards', 'map'],
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
   },
   terms: {
     sectionOrder: ['header', 'document', 'footerNote'],
@@ -209,6 +250,9 @@ const DEFAULT_VIEWS = {
     badgeText: 'Informations Légales Royal',
     showFooterNote: true,
     footerNoteText: 'Document mis à jour conformément à la réglementation tunisienne du commerce électronique.',
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
   },
   privacy: {
     sectionOrder: ['header', 'document', 'footerNote'],
@@ -216,6 +260,69 @@ const DEFAULT_VIEWS = {
     badgeText: 'Protection des Données',
     showFooterNote: true,
     footerNoteText: 'Pour toute demande relative à vos données personnelles, contactez notre support à royaltn24@gmail.com.',
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
+  },
+  cart: {
+    sectionOrder: ['header', 'itemsList', 'guarantees', 'summary'],
+    showHeader: true,
+    badgeText: 'Mon Panier',
+    title: 'Votre Sélection Royal',
+    subtitle: 'Vérifiez vos articles, appliquez un code promo ou profitez de la livraison gratuite.',
+    showCouponBox: true,
+    showFreeShippingProgress: true,
+    showGuarantees: true,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
+  },
+  checkout: {
+    sectionOrder: ['header', 'contactStep', 'fulfillmentStep', 'shippingStep', 'paymentStep', 'notesStep', 'summary'],
+    badgeText: 'Commande Sécurisée',
+    title: 'Finaliser Votre Commande',
+    subtitle: 'Livraison rapide 24h–48h partout en Tunisie ou Retrait en Showroom Royal.',
+    showFulfillmentToggle: true,
+    allowDelivery: true,
+    allowShowroomPickup: true,
+    showCouponBox: true,
+    showNotesStep: true,
+    showroomPayLabel: 'Payer sur place (au showroom)',
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
+  },
+  compare: {
+    sectionOrder: ['header', 'comparisonTable'],
+    badgeText: 'Comparateur Technique',
+    title: 'Comparer les Équipements',
+    subtitle: 'Analysez côte à côte prix, garanties et caractéristiques techniques jusqu’à 4 articles.',
+    maxCompareItems: 4,
+    showAddToCart: true,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
+  },
+  wishlist: {
+    sectionOrder: ['header', 'productsGrid'],
+    badgeText: 'Liste d’Envies',
+    title: 'Vos Articles Favoris',
+    subtitle: 'Retrouvez vos équipements enregistrés et ajoutez-les au panier en un clic.',
+    defaultColumns: '4',
+    cardImageHeightPx: 260,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
+  },
+  trackOrder: {
+    sectionOrder: ['header', 'searchForm', 'timelineResult'],
+    badgeText: 'Suivi Temps Réel',
+    title: 'Suivre Votre Commande',
+    subtitle: 'Saisissez votre référence CMD-... pour consulter l’état logistique de votre commande.',
+    showNineStepTimeline: true,
+    elementStyles: {},
+    customBlocks: [],
+    viewStyle: {},
   },
 };
 
@@ -393,6 +500,8 @@ export class StorefrontCmsService {
               'cms.views',
               'cms.heroSlides',
               'cms.testimonials',
+              'cms.customViews',
+              'cms.globalCustomCode',
               'sys.translations',
               'sys.generalSettings',
             ],
@@ -448,7 +557,14 @@ export class StorefrontCmsService {
       showrooms: { ...DEFAULT_VIEWS.showrooms, ...(defaultViews.showrooms || {}), ...(rawViews.showrooms || {}) },
       terms: { ...DEFAULT_VIEWS.terms, ...((defaultViews as any).terms || {}), ...(rawViews.terms || {}) },
       privacy: { ...DEFAULT_VIEWS.privacy, ...((defaultViews as any).privacy || {}), ...(rawViews.privacy || {}) },
+      cart: { ...DEFAULT_VIEWS.cart, ...((defaultViews as any).cart || {}), ...(rawViews.cart || {}) },
+      checkout: { ...DEFAULT_VIEWS.checkout, ...((defaultViews as any).checkout || {}), ...(rawViews.checkout || {}) },
+      compare: { ...DEFAULT_VIEWS.compare, ...((defaultViews as any).compare || {}), ...(rawViews.compare || {}) },
+      wishlist: { ...DEFAULT_VIEWS.wishlist, ...((defaultViews as any).wishlist || {}), ...(rawViews.wishlist || {}) },
+      trackOrder: { ...DEFAULT_VIEWS.trackOrder, ...((defaultViews as any).trackOrder || {}), ...(rawViews.trackOrder || {}) },
     };
+    const customViews = this.parseJsonSetting<any[]>(map.get('cms.customViews'), []);
+    const globalCustomCode = this.parseJsonSetting<any>(map.get('cms.globalCustomCode'), DEFAULT_GLOBAL_CUSTOM_CODE);
     const rawHeroSlides = this.parseJsonSetting<any[]>(map.get('cms.heroSlides'), []);
     const heroSlides = this.sanitizeHeroSlides(rawHeroSlides, snap.heroSlides || []);
     const curatedTestimonials = this.parseJsonSetting<any[]>(map.get('cms.testimonials'), []);
@@ -506,6 +622,8 @@ export class StorefrontCmsService {
       header,
       footer,
       views,
+      customViews: Array.isArray(customViews) ? customViews : [],
+      globalCustomCode,
       heroSlides,
       defaults: snap,
       testimonials: activeTestimonials,
@@ -3371,6 +3489,14 @@ export class StorefrontCmsService {
     if (dto.footer) {
       await this.upsertSetting('cms.footer', JSON.stringify({ ...current.footer, ...dto.footer }), 'cms', updatedBy);
     }
+    if (dto.globalCustomCode) {
+      await this.upsertSetting(
+        'cms.globalCustomCode',
+        JSON.stringify({ ...(current.globalCustomCode || DEFAULT_GLOBAL_CUSTOM_CODE), ...dto.globalCustomCode }),
+        'cms',
+        updatedBy,
+      );
+    }
     return this.getPublicConfig();
   }
 
@@ -3386,6 +3512,11 @@ export class StorefrontCmsService {
       showrooms: { ...current.views.showrooms, ...(incoming.showrooms || {}) },
       terms: { ...((current.views as any).terms || {}), ...(incoming.terms || {}) },
       privacy: { ...((current.views as any).privacy || {}), ...(incoming.privacy || {}) },
+      cart: { ...((current.views as any).cart || {}), ...(incoming.cart || {}) },
+      checkout: { ...((current.views as any).checkout || {}), ...(incoming.checkout || {}) },
+      compare: { ...((current.views as any).compare || {}), ...(incoming.compare || {}) },
+      wishlist: { ...((current.views as any).wishlist || {}), ...(incoming.wishlist || {}) },
+      trackOrder: { ...((current.views as any).trackOrder || {}), ...(incoming.trackOrder || {}) },
     };
     await this.upsertSetting('cms.views', JSON.stringify(merged), 'cms', updatedBy);
     const rawNextSlides = Array.isArray(dto.heroSlides)
@@ -3403,6 +3534,120 @@ export class StorefrontCmsService {
     return this.getPublicConfig();
   }
 
+  async listCustomViews(includeUnpublished = true) {
+    const row = await this.prisma.settings.findUnique({ where: { key: 'cms.customViews' } });
+    const list = this.parseJsonSetting<any[]>(row?.value, []);
+    const arr = Array.isArray(list) ? list : [];
+    return includeUnpublished ? arr : arr.filter((v) => v?.isPublished !== false);
+  }
+
+  async getPublicCustomViewBySlug(slug: string) {
+    const clean = String(slug || '').trim().toLowerCase();
+    const list = await this.listCustomViews(false);
+    const found = list.find((v) => String(v?.slug || '').toLowerCase() === clean);
+    if (!found) {
+      throw new NotFoundException(`Vue personnalisée "${slug}" introuvable ou non publiée.`);
+    }
+    return found;
+  }
+
+  private normalizeCustomViewSlug(raw: string): string {
+    return String(raw || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+  }
+
+  async upsertCustomView(idOrNull: string | null, dto: UpsertCustomViewDto, updatedBy?: string) {
+    const currentList = await this.listCustomViews(true);
+    const slug = this.normalizeCustomViewSlug(dto.slug || dto.title);
+    if (!slug) {
+      throw new BadRequestException('Slug invalide pour la vue personnalisée.');
+    }
+
+    const existingIdx = idOrNull
+      ? currentList.findIndex((v) => v.id === idOrNull || v.slug === idOrNull)
+      : currentList.findIndex((v) => v.slug === slug);
+
+    const now = new Date().toISOString();
+    const record = {
+      id: existingIdx >= 0 ? currentList[existingIdx].id : `cv-${Date.now()}`,
+      slug,
+      title: dto.title.trim(),
+      subtitle: dto.subtitle || '',
+      badgeText: dto.badgeText || 'Page Spéciale Royal',
+      isPublished: dto.isPublished !== false,
+      seoTitle: dto.seoTitle || dto.title.trim(),
+      seoDescription: dto.seoDescription || dto.subtitle || '',
+      viewStyle: dto.viewStyle || {},
+      blocks: Array.isArray(dto.blocks) ? dto.blocks : [],
+      createdAt: existingIdx >= 0 ? currentList[existingIdx].createdAt || now : now,
+      updatedAt: now,
+      updatedBy: updatedBy || 'ROOT',
+    };
+
+    const nextList = [...currentList];
+    if (existingIdx >= 0) {
+      nextList[existingIdx] = record;
+    } else {
+      nextList.push(record);
+    }
+
+    await this.upsertSetting('cms.customViews', JSON.stringify(nextList), 'cms', updatedBy);
+
+    // Optional instant linking to Header Nav & Footer Columns
+    const href = `/pages/${slug}`;
+    if (dto.linkToHeader || (dto.linkToFooterCol && dto.linkToFooterCol !== 'none')) {
+      const cfg = await this.getPublicConfig();
+      if (dto.linkToHeader) {
+        const navLinks = Array.isArray(cfg.header?.navLinks) ? [...cfg.header.navLinks] : [...DEFAULT_HEADER.navLinks];
+        if (!navLinks.some((l: any) => l?.href === href)) {
+          navLinks.push({
+            id: `nav-${slug}`,
+            label: record.title,
+            href,
+            visible: true,
+            highlight: false,
+          });
+          await this.upsertSetting(
+            'cms.header',
+            JSON.stringify({ ...cfg.header, navLinks }),
+            'cms',
+            updatedBy,
+          );
+        }
+      }
+      if (dto.linkToFooterCol && dto.linkToFooterCol !== 'none') {
+        const colKey = `${dto.linkToFooterCol}Links`;
+        const colLinks = Array.isArray(cfg.footer?.[colKey]) ? [...cfg.footer[colKey]] : [];
+        if (!colLinks.some((l: any) => l?.href === href)) {
+          colLinks.push({ label: record.title, href });
+          await this.upsertSetting(
+            'cms.footer',
+            JSON.stringify({ ...cfg.footer, [colKey]: colLinks }),
+            'cms',
+            updatedBy,
+          );
+        }
+      }
+    }
+
+    return record;
+  }
+
+  async deleteCustomView(idOrSlug: string, updatedBy?: string) {
+    const currentList = await this.listCustomViews(true);
+    const target = currentList.find((v) => v.id === idOrSlug || v.slug === idOrSlug);
+    if (!target) {
+      throw new NotFoundException(`Vue personnalisée "${idOrSlug}" introuvable.`);
+    }
+    const nextList = currentList.filter((v) => v.id !== target.id);
+    await this.upsertSetting('cms.customViews', JSON.stringify(nextList), 'cms', updatedBy);
+    return { deleted: true, id: target.id, slug: target.slug };
+  }
+
   async resetCmsDefaults(
     updatedBy?: string,
     scope: 'all' | 'layout' | 'view' = 'all',
@@ -3418,6 +3663,11 @@ export class StorefrontCmsService {
       showrooms: { ...DEFAULT_VIEWS.showrooms, ...(snap.views?.showrooms || {}) },
       terms: { ...DEFAULT_VIEWS.terms, ...(snap.views?.terms || {}) },
       privacy: { ...DEFAULT_VIEWS.privacy, ...(snap.views?.privacy || {}) },
+      cart: { ...DEFAULT_VIEWS.cart },
+      checkout: { ...DEFAULT_VIEWS.checkout },
+      compare: { ...DEFAULT_VIEWS.compare },
+      wishlist: { ...DEFAULT_VIEWS.wishlist },
+      trackOrder: { ...DEFAULT_VIEWS.trackOrder },
     };
 
     if (scope === 'layout') {
@@ -3425,12 +3675,18 @@ export class StorefrontCmsService {
         this.upsertSetting('cms.theme', JSON.stringify(snap.theme || DEFAULT_THEME), 'cms', updatedBy),
         this.upsertSetting('cms.header', JSON.stringify(snap.header || DEFAULT_HEADER), 'cms', updatedBy),
         this.upsertSetting('cms.footer', JSON.stringify(snap.footer || DEFAULT_FOOTER), 'cms', updatedBy),
+        this.upsertSetting('cms.globalCustomCode', JSON.stringify(DEFAULT_GLOBAL_CUSTOM_CODE), 'cms', updatedBy),
       ]);
       return this.getPublicConfig();
     }
 
     if (scope === 'view' && viewKey) {
-      const resolvedKey = viewKey === 'product-detail' ? 'productDetail' : viewKey;
+      const resolvedKey =
+        viewKey === 'product-detail'
+          ? 'productDetail'
+          : viewKey === 'track-order'
+          ? 'trackOrder'
+          : viewKey;
       if (resolvedKey in defaultViewsMap) {
         const current = await this.getPublicConfig();
         const nextViews = {
@@ -3456,6 +3712,7 @@ export class StorefrontCmsService {
       this.upsertSetting('cms.theme', JSON.stringify(snap.theme || DEFAULT_THEME), 'cms', updatedBy),
       this.upsertSetting('cms.header', JSON.stringify(snap.header || DEFAULT_HEADER), 'cms', updatedBy),
       this.upsertSetting('cms.footer', JSON.stringify(snap.footer || DEFAULT_FOOTER), 'cms', updatedBy),
+      this.upsertSetting('cms.globalCustomCode', JSON.stringify(DEFAULT_GLOBAL_CUSTOM_CODE), 'cms', updatedBy),
       this.upsertSetting('cms.views', JSON.stringify(defaultViewsMap), 'cms', updatedBy),
       this.upsertSetting('cms.heroSlides', JSON.stringify(snap.heroSlides || []), 'cms', updatedBy),
     ]);

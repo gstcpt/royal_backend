@@ -53,6 +53,7 @@ import {
   UpdateSupportStatusDto,
   UpdateSysConfigDto,
   UpsertCuratedTestimonialDto,
+  UpsertCustomViewDto,
   UpsertEmailTemplateDto,
   UpsertFaqDto,
   UpsertShowroomDto,
@@ -624,6 +625,44 @@ export class StorefrontCmsController {
   @Permissions('settings:update')
   resetCmsDefaults(@Req() req: any, @Body() dto?: ResetCmsDefaultsDto) {
     return this.service.resetCmsDefaults(req.user?.email, dto?.scope, dto?.viewKey);
+  }
+
+  @Get('cms/custom-views')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:read')
+  listCustomViewsAdmin() {
+    return this.service.listCustomViews(true);
+  }
+
+  @Public()
+  @Get('cms/custom-views/public/:slug')
+  getPublicCustomView(@Param('slug') slug: string) {
+    return this.service.getPublicCustomViewBySlug(slug);
+  }
+
+  @Post('cms/custom-views')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:update')
+  createCustomView(@Body() dto: UpsertCustomViewDto, @Req() req: any) {
+    return this.service.upsertCustomView(null, dto, req.user?.email);
+  }
+
+  @Patch('cms/custom-views/:id')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:update')
+  updateCustomView(@Param('id') id: string, @Body() dto: UpsertCustomViewDto, @Req() req: any) {
+    return this.service.upsertCustomView(id, dto, req.user?.email);
+  }
+
+  @Delete('cms/custom-views/:id')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:update')
+  deleteCustomView(@Param('id') id: string, @Req() req: any) {
+    return this.service.deleteCustomView(id, req.user?.email);
   }
 
   @Public()
