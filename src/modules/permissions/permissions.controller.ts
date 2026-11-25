@@ -42,13 +42,6 @@ export class PermissionsController {
     return this.permissionsService.scanAndSyncViews();
   }
 
-  @Post('assign-delivery-defaults')
-  @Permissions('roles.permissions.assign')
-  @ApiOperation({ summary: 'Attribuer les permissions et vues par défaut à DELIVERY_MANAGER et DELIVERY_AGENT' })
-  async assignDeliveryDefaults(@Body() body?: { force?: boolean }) {
-    return this.permissionsService.assignDeliveryDefaults(Boolean(body?.force));
-  }
-
   @Get('module/:name')
   @Permissions('roles.read')
   @ApiOperation({ summary: 'Liste des permissions pour un module spécifique' })

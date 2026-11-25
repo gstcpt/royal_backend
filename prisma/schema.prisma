@@ -780,25 +780,35 @@ enum StockMovementType {
 }
 
 model StockTransfer {
-  id            String               @id @default(cuid())
-  reference     String               @unique
+  id              String               @id @default(cuid())
+  reference       String               @unique
+  requestRef      String?
+  requestType     String               @default("INTERNAL") // INTERNAL | SHOWROOM_PICKUP
+  acceptanceMode  String?              // IMMEDIATE | STEP_BY_STEP
+  orderId         String?
+  showroomId      String?
   fromWarehouseId String
-  toWarehouseId String
-  status        StockTransferStatus  @default(PENDING)
-  notes         String?
-  requestedBy   String
-  approvedBy    String?
-  completedBy   String?
-  requestedAt   DateTime             @default(now())
-  approvedAt    DateTime?
-  completedAt   DateTime?
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+  toWarehouseId   String
+  status          StockTransferStatus  @default(PENDING)
+  notes           String?
+  requestedBy     String
+  approvedBy      String?
+  completedBy     String?
+  requestedAt     DateTime             @default(now())
+  approvedAt      DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
   fromWarehouse Warehouse            @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
   toWarehouse   Warehouse            @relation("TransferTo", fields: [toWarehouseId], references: [id])
+  order         Order?               @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  showroom      PointOfSale?         @relation(fields: [showroomId], references: [id], onDelete: SetNull)
   items         StockTransferItem[]
 
+  @@index([orderId])
+  @@index([showroomId])
+  @@index([status])
   @@map("stock_transfers")
 }
 
@@ -838,9 +848,11 @@ model PointOfSale {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  warehouse     Warehouse       @relation(fields: [warehouseId], references: [id])
-  cashRegisters CashRegister[]
-  userRoles     UserRole[]
+  warehouse      Warehouse       @relation(fields: [warehouseId], references: [id])
+  cashRegisters  CashRegister[]
+  userRoles      UserRole[]
+  pickupOrders   Order[]
+  stockTransfers StockTransfer[]
 
   @@map("points_of_sale")
 }
@@ -1000,10 +1012,16 @@ model Order {
   couponId             String?
   couponCode           String?
   couponDiscount       Decimal?     @db.Decimal(14, 4)
-  shippingAddressJson  Json?
-  billingAddressJson   Json?
-  deliveryMethodId     String?
-  notes                String?
+  shippingAddressJson    Json?
+  billingAddressJson     Json?
+  deliveryMethodId       String?
+  fulfillmentType        String                     @default("DELIVERY") // DELIVERY | SHOWROOM_PICKUP
+  deliveryCompanyId      String?
+  deliveryMethodType     DeliveryCalculationMethod?
+  deliveryDistanceKm     Decimal?                   @db.Decimal(10, 2)
+  deliveryTotalWeightKg  Decimal?                   @db.Decimal(10, 3)
+  pickupShowroomId       String?
+  notes                  String?
   confirmedAt          DateTime?
   shippedAt            DateTime?
   deliveredAt          DateTime?
@@ -1019,18 +1037,23 @@ model Order {
   deletedAt            DateTime?
   deletedBy            String?
 
-  customer      Customer?           @relation(fields: [customerId], references: [id])
-  guestCustomer Customer?           @relation("GuestOrders", fields: [guestEmail], references: [email])
-  items         OrderItem[]
-  statusHistory OrderStatusHistory[]
-  payments      Payment[]
-  delivery      Delivery?
-  invoices      Invoice[]
+  customer        Customer?            @relation(fields: [customerId], references: [id])
+  guestCustomer   Customer?            @relation("GuestOrders", fields: [guestEmail], references: [email])
+  deliveryCompany DeliveryCompany?     @relation(fields: [deliveryCompanyId], references: [id], onDelete: SetNull)
+  pickupShowroom  PointOfSale?         @relation(fields: [pickupShowroomId], references: [id], onDelete: SetNull)
+  items           OrderItem[]
+  statusHistory   OrderStatusHistory[]
+  payments        Payment[]
+  delivery        Delivery?
+  invoices        Invoice[]
+  stockTransfers  StockTransfer[]
 
   @@index([customerId])
   @@index([status])
   @@index([reference])
   @@index([createdAt])
+  @@index([deliveryCompanyId])
+  @@index([pickupShowroomId])
   @@map("orders")
 }
 
@@ -1150,19 +1173,54 @@ model DeliveryMethod {
   @@map("delivery_methods")
 }
 
+enum DeliveryCalculationMethod {
+  DISTANCE
+  WEIGHT
+  FIXED
+}
+
 model DeliveryCompany {
-  id        String   @id @default(cuid())
-  name      String
-  code      String   @unique
-  apiConfig Json?    // provider-specific credentials (encrypted)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String                    @id @default(cuid())
+  name          String
+  code          String                    @unique
+  phone         String?
+  email         String?
+  logoUrl       String?
+  originCountry String                    @default("TN")
+  originState   String                    @default("Tunis")
+  originCity    String?
+  estimatedDays String                    @default("24h - 48h")
+  defaultMethod DeliveryCalculationMethod @default(FIXED)
+  fixedPrice    Decimal                   @db.Decimal(14, 4) @default(7)
+  apiConfig     Json?                     // provider-specific credentials (encrypted)
+  isActive      Boolean                   @default(true)
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
 
   deliveries     Delivery[]
   deliveryAgents DeliveryAgent[]
+  pricingMethods DeliveryCompanyMethod[]
+  orders         Order[]
 
   @@map("delivery_companies")
+}
+
+model DeliveryCompanyMethod {
+  id           String                    @id @default(cuid())
+  companyId    String
+  method       DeliveryCalculationMethod
+  isEnabled    Boolean                   @default(true)
+  isDefault    Boolean                   @default(false)
+  fixedPrice   Decimal?                  @db.Decimal(14, 4)
+  bracketsJson Json                      @default("[]") // [{ min: number, max: number | null, price: number, label?: string }]
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+
+  company DeliveryCompany @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, method])
+  @@index([companyId])
+  @@map("delivery_company_methods")
 }
 
 model DeliveryAgent {
@@ -1511,6 +1569,9 @@ enum NotificationType {
   REFUND_PROCESSED
   REVIEW_APPROVED
   LOW_STOCK
+  TRANSFER_REQUEST
+  TRANSFER_APPROVED
+  TRANSFER_COMPLETED
   SYSTEM
 }
 

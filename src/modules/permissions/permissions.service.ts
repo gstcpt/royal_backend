@@ -4,7 +4,6 @@ import { CreatePermissionDto } from './dto/create-permission.dto';
 import {
   buildFrenchActionTitle,
   CANONICAL_RBAC_SECTIONS,
-  ensureDeliveryRoleDefaults,
   scanWorkspaceRbacSurface,
   syncPermissionsViews,
 } from './rbac-scanner.helper';
@@ -21,13 +20,6 @@ export class PermissionsService implements OnModuleInit {
       if (existingCount === 0) {
         const res = await syncPermissionsViews(this.prisma);
         this.logger.log(`Seeded permissions_views automatically (${res.upsertedCount} records).`);
-      }
-      const deliveryRes = await ensureDeliveryRoleDefaults(this.prisma, { force: false });
-      const touched = Object.entries(deliveryRes)
-        .filter(([, v]) => !v.skipped)
-        .map(([k, v]) => `${k}(+${v.permissionsAssigned}p/+${v.viewsAssigned}v)`);
-      if (touched.length > 0) {
-        this.logger.log(`Initialized delivery defaults: ${touched.join(', ')}`);
       }
     } catch (err: any) {
       this.logger.warn(`RBAC startup sync skipped: ${err?.message || err}`);
@@ -104,11 +96,9 @@ export class PermissionsService implements OnModuleInit {
 
   async scanAndSyncViews() {
     const syncResult = await syncPermissionsViews(this.prisma);
-    const deliveryResult = await ensureDeliveryRoleDefaults(this.prisma, { force: false });
     const viewsData = await this.listPermissionViews();
     return {
       scan: syncResult,
-      deliveryDefaults: deliveryResult,
       totalStored: viewsData.total,
       sections: viewsData.sections,
       items: viewsData.items,
@@ -117,10 +107,6 @@ export class PermissionsService implements OnModuleInit {
 
   async inspectScannerSurface() {
     return scanWorkspaceRbacSurface();
-  }
-
-  async assignDeliveryDefaults(force = false) {
-    return ensureDeliveryRoleDefaults(this.prisma, { force });
   }
 
   /**

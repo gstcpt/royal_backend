@@ -4771,6 +4771,7 @@ export class StorefrontCmsService {
         { id: 'pref-be', code: 'BE', docType: 'Bon d’Entrée Stock', format: '{PREFIX}-{YYYY}-{SEQ4}', nextSeq: 43, preview: 'BE-2026-0043', isActive: true, printTemplateCode: 'TPL-BON-ENTREE', createdAt: new Date().toISOString() },
         { id: 'pref-bs', code: 'BS', docType: 'Bon de Sortie & Picking', format: '{PREFIX}-{YYYY}-{SEQ4}', nextSeq: 12, preview: 'BS-2026-0012', isActive: true, printTemplateCode: 'TPL-BON-SORTIE', createdAt: new Date().toISOString() },
         { id: 'pref-inv', code: 'INV', docType: 'Document Inventaire & Ajustement', format: '{PREFIX}-{YYYY}-{SEQ4}', nextSeq: 15, preview: 'INV-2026-0015', isActive: true, printTemplateCode: 'TPL-INVENTAIRE', createdAt: new Date().toISOString() },
+        { id: 'pref-dtr', code: 'DTR', docType: 'Demande de Transfert Inter-Dépôts (Showroom)', format: '{PREFIX}-{YYYY}-{SEQ4}', nextSeq: 1, preview: 'DTR-2026-0001', isActive: true, printTemplateCode: 'TPL-DEMANDE-TRF', createdAt: new Date().toISOString() },
         { id: 'pref-trf', code: 'TRF', docType: 'Transfert Inter-Dépôts', format: '{PREFIX}-{YYYY}-{SEQ4}', nextSeq: 14, preview: 'TRF-2026-0014', isActive: true, printTemplateCode: 'TPL-TRANSFERT', createdAt: new Date().toISOString() },
         { id: 'pref-ret', code: 'RET', docType: 'Bon de Retour & Avoir SAV', format: '{PREFIX}-{YYYY}-{SEQ4}', nextSeq: 13, preview: 'RET-2026-0013', isActive: true, printTemplateCode: 'TPL-BON-RETOUR', createdAt: new Date().toISOString() },
         { id: 'pref-ecr', code: 'ECR', docType: 'Pièce & Écriture Comptable', format: '{PREFIX}-{YYYY}-{SEQ4}', nextSeq: 45, preview: 'ECR-2026-0045', isActive: true, printTemplateCode: 'TPL-PIECE-COMPTA', createdAt: new Date().toISOString() },
@@ -4923,6 +4924,22 @@ export class StorefrontCmsService {
           createdAt: new Date().toISOString(),
         },
         {
+          id: 'tpl-dtr',
+          code: 'TPL-DEMANDE-TRF',
+          name: 'Demande de Transfert Inter-Dépôts Showroom (DTR)',
+          paperFormat: 'A4',
+          prefixCode: 'DTR',
+          headerText: 'Demande de Réassort Showroom — Direction & Logistique Royal',
+          footerText: 'Validation requise (Exécution Immédiate ou Suivi par Étapes).',
+          htmlBody: '<div class="royal-doc"><h2>DEMANDE DE TRANSFERT {{reference}}</h2></div>',
+          cssStyles: '.royal-doc { font-family: Poppins, sans-serif; border-top: 4px solid #C59B27; padding: 20px; }',
+          showLogo: true,
+          showTaxBreakdown: false,
+          showQr: true,
+          isActive: true,
+          createdAt: new Date().toISOString(),
+        },
+        {
           id: 'tpl-trf',
           code: 'TPL-TRANSFERT',
           name: 'Bordereau de Transfert Inter-Dépôts (TRF)',
@@ -4994,8 +5011,6 @@ export class StorefrontCmsService {
         { key: '/dashboard/users/financiers', label: 'Financiers', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/commercials', label: 'Commercials', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/marketing', label: 'Marketing', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
-        { key: '/dashboard/users/delivery-managers', label: 'Responsables Livraison', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
-        { key: '/dashboard/users/delivery-agents', label: 'Livreurs', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/users/clients', label: 'Clients (Comptes RBAC)', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         // Catalogue
         { key: '/dashboard/brands', label: 'Marques', section: 'Catalogue', visibility: 'PUBLIC' },
@@ -5024,6 +5039,7 @@ export class StorefrontCmsService {
         // Ventes & Distribution
         { key: '/dashboard/customers', label: 'Fiches clients', section: 'Ventes & Distribution', visibility: 'PUBLIC' },
         { key: '/dashboard/orders', label: 'Commandes clients', section: 'Ventes & Distribution', visibility: 'PUBLIC' },
+        { key: '/dashboard/delivery-companies', label: 'Sociétés & Tarifs de Livraison', section: 'Ventes & Distribution', visibility: 'PRIVATE' },
         { key: '/dashboard/deliveries', label: 'Bon de livraison (BL)', section: 'Ventes & Distribution', visibility: 'PRIVATE' },
         { key: '/dashboard/returns', label: 'Bon de retour (BR)', section: 'Ventes & Distribution', visibility: 'PRIVATE' },
         { key: '/dashboard/invoices', label: 'Factures', section: 'Ventes & Distribution', visibility: 'PRIVATE' },
@@ -5058,6 +5074,7 @@ export class StorefrontCmsService {
         { key: '/dashboard/root/print-templates', label: 'Documents & Imprimantes POS', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/payment-methods', label: 'Modalités & Passerelles Paiement', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/settings', label: 'Paramètres généraux', section: 'Système & CMS', visibility: 'PRIVATE' },
+        { key: '/dashboard/root/delivery-settings', label: 'Règles Livraison, Distances & Transferts', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/translations', label: 'Traductions i18n', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/root/roles-permissions', label: 'Rôles et permissions', section: 'Système & CMS', visibility: 'PRIVATE' },
         { key: '/dashboard/logs', label: "Journal d'audit", section: 'Système & CMS', visibility: 'PRIVATE' },
@@ -5119,7 +5136,8 @@ export class StorefrontCmsService {
         maintenanceMode: false,
         maintenanceMessage:
           'Notre boutique est momentanément en maintenance technique. Merci de votre patience.',
-        deliveryFleetEnabled: true,
+        deliveryCompaniesEnabled: true,
+        autoTransferShowroomEnabled: true,
       };
     }
     if (key === 'translations') {
@@ -5315,6 +5333,7 @@ export class StorefrontCmsService {
     const sales = [
       '/dashboard/customers',
       '/dashboard/orders',
+      '/dashboard/delivery-companies',
       '/dashboard/deliveries',
       '/dashboard/returns',
       '/dashboard/invoices',
@@ -5338,8 +5357,6 @@ export class StorefrontCmsService {
       '/dashboard/users/financiers',
       '/dashboard/users/commercials',
       '/dashboard/users/marketing',
-      '/dashboard/users/delivery-managers',
-      '/dashboard/users/delivery-agents',
       '/dashboard/users/clients',
     ];
     const systemShared = [
@@ -5351,6 +5368,7 @@ export class StorefrontCmsService {
       '/dashboard/root/tva',
       '/dashboard/root/reference-prefixes',
       '/dashboard/root/print-templates',
+      '/dashboard/root/delivery-settings',
       '/dashboard/payment-methods',
       '/dashboard/settings',
       '/dashboard/translations',
@@ -5415,8 +5433,6 @@ export class StorefrontCmsService {
       SALESPERSON: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', ...sales, ...pos, ...clientSpace],
       ACCOUNTANT: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', ...treasury, ...purchases, ...sales, ...reports, ...clientSpace],
       COMMERCIAL: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', ...catalogue, '/dashboard/purchases/prospects', ...sales, ...clientSpace],
-      DELIVERY_MANAGER: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', '/dashboard/deliveries', '/dashboard/orders', '/dashboard/pos/showrooms', ...clientSpace],
-      DELIVERY_AGENT: ['/dashboard', '/dashboard/community/notifications', '/dashboard/community/messages', '/dashboard/deliveries', '/dashboard/orders', ...clientSpace],
       CLIENT: ['/dashboard', '/account/notifications', '/account/messages', ...clientSpace],
     };
   }

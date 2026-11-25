@@ -21,6 +21,7 @@ import { PosModule } from './modules/pos/pos.module';
 import { CouponsModule } from './modules/coupons/coupons.module';
 import { CartModule } from './modules/cart/cart.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { DeliveriesModule } from './modules/deliveries/deliveries.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { StorefrontCmsModule } from './modules/storefront-cms/storefront-cms.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
@@ -60,6 +61,7 @@ import { validateEnvironment } from './config/env.validation';
     CouponsModule,
     CartModule,
     OrdersModule,
+    DeliveriesModule,
     AuditLogsModule,
     StorefrontCmsModule,
   ],

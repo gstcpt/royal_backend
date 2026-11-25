@@ -225,8 +225,6 @@ export class UsersService {
         ACCOUNTANT: ['ACCOUNTANT'],
         COMMERCIAL: ['COMMERCIAL'],
         MARKETING: ['MARKETING'],
-        DELIVERY_MANAGER: ['DELIVERY_MANAGER'],
-        DELIVERY_AGENT: ['DELIVERY_AGENT'],
         CLIENT: ['CLIENT'],
         ROOT: ['ROOT'],
       };

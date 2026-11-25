@@ -6,10 +6,18 @@ import {
 import { PrismaService } from '../../database/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { CouponsService } from '../coupons/coupons.service';
+import { DeliveriesService } from '../deliveries/deliveries.service';
+import { allocateSystemDocumentReference } from '../deliveries/delivery-pricing.helper';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { OrderChannel, OrderStatus, PaymentMethod } from '@royal/shared-types';
-import { ProductStatus } from '@prisma/client';
+import {
+  DeliveryCalculationMethod,
+  DeliveryStatus,
+  NotificationType,
+  ProductStatus,
+  StockTransferStatus,
+} from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 
 @Injectable()
@@ -18,6 +26,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly inventoryService: InventoryService,
     private readonly couponsService: CouponsService,
+    private readonly deliveriesService: DeliveriesService,
   ) {}
 
   async create(dto: CreateOrderDto, userId?: string) {
@@ -162,65 +171,184 @@ export class OrdersService {
       }
     }
 
-    const shipSettings = await this.prisma.settings.findMany({
-      where: { key: { in: ['shipping.free_threshold', 'shipping.standard_fee'] } },
-    });
-    const shipMap = new Map(shipSettings.map((s) => [s.key, Number(s.value)]));
-    const shippingThreshold = shipMap.get('shipping.free_threshold') ?? 150.0;
-    const standardShipping = shipMap.get('shipping.standard_fee') ?? 7.0;
     const subtotalAfterDiscount = Decimal.max(0, subtotal.minus(discountAmount));
-    const shippingAmount = subtotalAfterDiscount.greaterThanOrEqualTo(shippingThreshold)
-      ? new Decimal(0)
-      : new Decimal(standardShipping);
+
+    const isShowroomPickup =
+      dto.fulfillmentType === 'SHOWROOM_PICKUP' ||
+      Boolean(dto.pickupShowroomId) ||
+      dto.deliveryMethod === 'SHOWROOM_PICKUP';
+
+    let pickupShowroom: any = null;
+    let selectedQuote: any = null;
+    let shippingAmount = new Decimal(0);
+
+    if (isShowroomPickup) {
+      if (dto.pickupShowroomId) {
+        pickupShowroom = await this.prisma.pointOfSale.findUnique({
+          where: { id: dto.pickupShowroomId },
+          include: { warehouse: true },
+        });
+      }
+      if (!pickupShowroom) {
+        pickupShowroom = await this.prisma.pointOfSale.findFirst({
+          where: { isActive: true },
+          include: { warehouse: true },
+        });
+      }
+      if (!pickupShowroom) {
+        throw new BadRequestException('Aucun showroom actif trouvé pour le retrait en magasin.');
+      }
+      shippingAmount = new Decimal(0);
+    } else {
+      const quoteRes = await this.deliveriesService.calculateDeliveryQuotes({
+        destinationCountry: dto.shippingAddress?.country || 'TN',
+        destinationState: dto.shippingAddress?.state || 'Tunis',
+        items: dto.items.map((it) => ({ variantId: it.variantId, quantity: it.quantity })),
+        subtotalTnd: subtotalAfterDiscount.toNumber(),
+      });
+
+      const activeQuotes = quoteRes.quotes.filter((q) => q.available && q.feeTnd !== null);
+      selectedQuote =
+        (dto.deliveryCompanyId
+          ? activeQuotes.find((q) => q.companyId === dto.deliveryCompanyId)
+          : null) || activeQuotes[0];
+
+      if (selectedQuote && selectedQuote.feeTnd !== null) {
+        shippingAmount = new Decimal(selectedQuote.feeTnd);
+      } else {
+        const shipSettings = await this.prisma.settings.findMany({
+          where: { key: { in: ['shipping.free_threshold', 'shipping.standard_fee'] } },
+        });
+        const shipMap = new Map(shipSettings.map((s) => [s.key, Number(s.value)]));
+        const shippingThreshold = shipMap.get('shipping.free_threshold') ?? 150.0;
+        const standardShipping = shipMap.get('shipping.standard_fee') ?? 7.0;
+        shippingAmount = subtotalAfterDiscount.greaterThanOrEqualTo(shippingThreshold)
+          ? new Decimal(0)
+          : new Decimal(standardShipping);
+      }
+    }
 
     const taxAmount = subtotalAfterDiscount.times(0.19);
     const totalAmount = subtotalAfterDiscount.plus(shippingAmount);
 
-    // 5. Generate human-readable reference: CMD-YYYYMMDD-XXXX
-    const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const randPart = Math.floor(1000 + Math.random() * 9000);
-    const reference = `CMD-${datePart}-${randPart}`;
+    // 5. Generate human-readable reference from System Prefix rules (CMD)
+    const reference = await allocateSystemDocumentReference(
+      this.prisma,
+      'CMD',
+      '{PREFIX}-{YYYY}{MM}-{SEQ4}',
+    );
 
-    // 6. Execute atomic creation & stock reservation in Prisma transaction
+    // 6. Execute atomic creation, stock deduction or Showroom Transfer Request in Prisma transaction
     const createdOrder = await this.prisma.$transaction(async (tx) => {
-      // Deduct or reserve stock for each item from assigned/available warehouse
-      for (const item of dto.items) {
-        let targetWhId = warehouse.id;
-        const defaultStock = await tx.stock.findUnique({
-          where: { variantId_warehouseId: { variantId: item.variantId, warehouseId: warehouse.id } },
+      const transferRequestsNeeded = new Map<
+        string,
+        Array<{ variantId: string; requestedQty: number; productName: string; sku: string }>
+      >();
+
+      if (isShowroomPickup && pickupShowroom) {
+        const targetWhId = pickupShowroom.warehouseId;
+        const otherWarehouses = await tx.warehouse.findMany({
+          where: { isActive: true, id: { not: targetWhId } },
+          orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
         });
-        if (!defaultStock) {
-          const anyStock = await tx.stock.findFirst({
-            where: { variantId: item.variantId, physicalQty: { gte: item.quantity } },
+
+        for (const item of dto.items) {
+          const showroomStock = await tx.stock.findUnique({
+            where: { variantId_warehouseId: { variantId: item.variantId, warehouseId: targetWhId } },
           });
-          if (anyStock) {
-            targetWhId = anyStock.warehouseId;
+          const localQty = Math.max(0, Number(showroomStock?.physicalQty || 0));
+
+          if (localQty >= item.quantity) {
+            await this.inventoryService.deductStock(
+              item.variantId,
+              targetWhId,
+              item.quantity,
+              'ONLINE_SALE',
+              reference,
+              userId || 'GUEST',
+              false,
+            );
           } else {
-            // Initialize stock from product metadata if present (e.g., quick catalog creation)
-            const variantRec = await tx.productVariant.findUnique({
-              where: { id: item.variantId },
-              include: { product: { select: { dimensionsJson: true } } },
-            });
-            const metaQty = Number((variantRec?.product?.dimensionsJson as any)?.stockQuantity ?? 20);
-            await tx.stock.create({
-              data: {
+            const missingQty = item.quantity - localQty;
+            if (localQty > 0) {
+              await this.inventoryService.deductStock(
+                item.variantId,
+                targetWhId,
+                localQty,
+                'ONLINE_SALE',
+                reference,
+                userId || 'GUEST',
+                false,
+              );
+            }
+
+            const donorStocks = await tx.stock.findMany({
+              where: {
                 variantId: item.variantId,
-                warehouseId: warehouse.id,
-                physicalQty: metaQty > 0 ? metaQty : 20,
-                reservedQty: 0,
+                warehouseId: { not: targetWhId },
+                physicalQty: { gt: 0 },
               },
+              orderBy: { physicalQty: 'desc' },
             });
+
+            const bestDonor =
+              donorStocks.find((s) => s.physicalQty >= missingQty)?.warehouseId ||
+              donorStocks[0]?.warehouseId ||
+              otherWarehouses[0]?.id ||
+              warehouse.id;
+
+            if (bestDonor && bestDonor !== targetWhId) {
+              const snap = itemsToSnapshot.find((s) => s.variantId === item.variantId);
+              const list = transferRequestsNeeded.get(bestDonor) || [];
+              list.push({
+                variantId: item.variantId,
+                requestedQty: missingQty,
+                productName: snap?.productName || 'Article',
+                sku: snap?.sku || item.variantId,
+              });
+              transferRequestsNeeded.set(bestDonor, list);
+            }
           }
         }
-        await this.inventoryService.deductStock(
-          item.variantId,
-          targetWhId,
-          item.quantity,
-          'ONLINE_SALE',
-          reference,
-          userId || 'GUEST',
-          false,
-        );
+      } else {
+        // Deduct stock for delivery order from assigned/available warehouse
+        for (const item of dto.items) {
+          let targetWhId = warehouse.id;
+          const defaultStock = await tx.stock.findUnique({
+            where: { variantId_warehouseId: { variantId: item.variantId, warehouseId: warehouse.id } },
+          });
+          if (!defaultStock || defaultStock.physicalQty < item.quantity) {
+            const anyStock = await tx.stock.findFirst({
+              where: { variantId: item.variantId, physicalQty: { gte: item.quantity } },
+            });
+            if (anyStock) {
+              targetWhId = anyStock.warehouseId;
+            } else if (!defaultStock) {
+              const variantRec = await tx.productVariant.findUnique({
+                where: { id: item.variantId },
+                include: { product: { select: { dimensionsJson: true } } },
+              });
+              const metaQty = Number((variantRec?.product?.dimensionsJson as any)?.stockQuantity ?? 20);
+              await tx.stock.create({
+                data: {
+                  variantId: item.variantId,
+                  warehouseId: warehouse.id,
+                  physicalQty: metaQty > 0 ? metaQty : 20,
+                  reservedQty: 0,
+                },
+              });
+            }
+          }
+          await this.inventoryService.deductStock(
+            item.variantId,
+            targetWhId,
+            item.quantity,
+            'ONLINE_SALE',
+            reference,
+            userId || 'GUEST',
+            false,
+          );
+        }
       }
 
       // If coupon used, increment usage count & create usage record
@@ -253,7 +381,23 @@ export class OrdersService {
           couponDiscount: appliedCoupon ? discountAmount : null,
           shippingAddressJson: dto.shippingAddress as any,
           billingAddressJson: (dto.billingAddress || dto.shippingAddress) as any,
-          deliveryMethodId: dto.deliveryMethod || 'STANDARD_HOME',
+          deliveryMethodId: isShowroomPickup
+            ? `SHOWROOM_PICKUP:${pickupShowroom?.code || ''}`
+            : selectedQuote?.code || dto.deliveryMethod || 'STANDARD_HOME',
+          fulfillmentType: isShowroomPickup ? 'SHOWROOM_PICKUP' : 'DELIVERY',
+          deliveryCompanyId: isShowroomPickup ? null : selectedQuote?.companyId || null,
+          deliveryMethodType: isShowroomPickup
+            ? null
+            : (selectedQuote?.method as DeliveryCalculationMethod) || null,
+          deliveryDistanceKm:
+            !isShowroomPickup && selectedQuote?.distanceKm !== undefined
+              ? new Decimal(selectedQuote.distanceKm)
+              : null,
+          deliveryTotalWeightKg:
+            !isShowroomPickup && selectedQuote?.totalWeightKg !== undefined
+              ? new Decimal(selectedQuote.totalWeightKg)
+              : null,
+          pickupShowroomId: isShowroomPickup ? pickupShowroom?.id || null : null,
           notes: dto.notes,
           items: {
             create: itemsToSnapshot.map((it) => ({
@@ -274,15 +418,99 @@ export class OrdersService {
               fromStatus: null,
               toStatus: OrderStatus.PENDING,
               changedBy: userId || 'GUEST',
-              comment: 'Commande passée en ligne sur Maison Royal',
+              comment: isShowroomPickup
+                ? `Retrait Showroom (${pickupShowroom?.name})${
+                    transferRequestsNeeded.size > 0
+                      ? ' — Demande de transfert interne inter-dépôts créée'
+                      : ' — Stock disponible en showroom'
+                  }`
+                : `Commande en livraison${selectedQuote ? ` (${selectedQuote.name})` : ''}`,
             },
           },
         },
         include: {
           items: true,
+          deliveryCompany: { select: { id: true, name: true, code: true, defaultMethod: true } },
+          pickupShowroom: { include: { warehouse: { select: { id: true, name: true, code: true } } } },
           statusHistory: { orderBy: { createdAt: 'desc' } },
         },
       });
+
+      // Create DB Delivery tracking record if using DeliveryCompany
+      if (!isShowroomPickup && selectedQuote?.companyId) {
+        const blRef = await allocateSystemDocumentReference(tx, 'BL', '{PREFIX}-{YY}{MM}-{SEQ4}');
+        await tx.delivery.create({
+          data: {
+            orderId: newOrder.id,
+            companyId: selectedQuote.companyId,
+            trackingNumber: blRef,
+            status: DeliveryStatus.ASSIGNED,
+            notes: `Calcul ${selectedQuote.method} (${selectedQuote.matchedBracketLabel || 'Standard'})`,
+          },
+        });
+      }
+
+      // Create Pending Internal Transfer Requests & Notifications for Showroom Pickup shortfalls
+      const createdTransfers: any[] = [];
+      if (isShowroomPickup && pickupShowroom && transferRequestsNeeded.size > 0) {
+        for (const [fromWhId, reqItems] of transferRequestsNeeded.entries()) {
+          const requestRef = await allocateSystemDocumentReference(tx, 'DTR', '{PREFIX}-{YYYY}-{SEQ4}');
+          const trfRef = await allocateSystemDocumentReference(tx, 'TRF', '{PREFIX}-{YYYY}-{SEQ4}');
+          const fromWh = await tx.warehouse.findUnique({ where: { id: fromWhId } });
+
+          const transfer = await tx.stockTransfer.create({
+            data: {
+              reference: trfRef,
+              requestRef,
+              requestType: 'SHOWROOM_PICKUP',
+              orderId: newOrder.id,
+              showroomId: pickupShowroom.id,
+              fromWarehouseId: fromWhId,
+              toWarehouseId: pickupShowroom.warehouseId,
+              status: StockTransferStatus.PENDING,
+              requestedBy: userId || dto.guestInfo?.email || 'CHECKOUT_CLIENT',
+              notes: `Réassort automatique pour commande ${reference} — Retrait showroom ${pickupShowroom.name}`,
+              items: {
+                create: reqItems.map((ri) => ({
+                  variantId: ri.variantId,
+                  requestedQty: ri.requestedQty,
+                  transferredQty: 0,
+                })),
+              },
+            },
+            include: {
+              fromWarehouse: true,
+              toWarehouse: true,
+              items: true,
+            },
+          });
+
+          await tx.notification.create({
+            data: {
+              type: NotificationType.TRANSFER_REQUEST,
+              title: `Demande de transfert Showroom (${requestRef})`,
+              body: `Commande ${reference} (${pickupShowroom.name}) : transfert requis de ${reqItems
+                .map((x) => `${x.requestedQty}x ${x.productName}`)
+                .join(', ')} depuis ${fromWh?.name || fromWhId} vers ${
+                pickupShowroom.warehouse?.name || pickupShowroom.warehouseId
+              }.`,
+              link: `/dashboard/transfers/${transfer.id}`,
+              metadata: {
+                channel: 'STOCK',
+                severity: 'WARNING',
+                targetRoles: 'ROOT / SUPER_ADMIN / WEBSITE_MANAGER',
+                transferId: transfer.id,
+                orderId: newOrder.id,
+                orderReference: reference,
+                requestRef,
+                bonRef: trfRef,
+              },
+            },
+          });
+
+          createdTransfers.push(transfer);
+        }
+      }
 
       if (appliedCoupon) {
         await tx.couponUsage.create({
@@ -306,7 +534,10 @@ export class OrdersService {
         },
       });
 
-      return newOrder;
+      return {
+        ...newOrder,
+        transferRequests: createdTransfers,
+      };
     });
 
     return createdOrder;
@@ -398,6 +629,11 @@ export class OrdersService {
         orderBy: { createdAt: 'desc' },
         include: {
           customer: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+          deliveryCompany: { select: { id: true, name: true, code: true, defaultMethod: true } },
+          pickupShowroom: { select: { id: true, name: true, code: true } },
+          stockTransfers: {
+            select: { id: true, reference: true, requestRef: true, status: true },
+          },
           items: true,
           payments: { take: 1, orderBy: { createdAt: 'desc' } },
         },
@@ -430,7 +666,15 @@ export class OrdersService {
         },
         statusHistory: { orderBy: { createdAt: 'desc' } },
         payments: true,
-        delivery: true,
+        delivery: { include: { company: { select: { id: true, name: true, code: true } } } },
+        deliveryCompany: { select: { id: true, name: true, code: true, defaultMethod: true } },
+        pickupShowroom: { include: { warehouse: { select: { id: true, name: true, code: true } } } },
+        stockTransfers: {
+          include: {
+            fromWarehouse: { select: { id: true, name: true, code: true } },
+            toWarehouse: { select: { id: true, name: true, code: true } },
+          },
+        },
         invoices: true,
       },
     });

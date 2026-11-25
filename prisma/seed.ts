@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import * as argon2 from 'argon2';
-import { ensureDeliveryRoleDefaults, syncPermissionsViews } from '../src/modules/permissions/rbac-scanner.helper';
+import { syncPermissionsViews } from '../src/modules/permissions/rbac-scanner.helper';
+import { ensureDefaultDeliveryCompanies, ensureDeliverySystemDocumentDefaults } from '../src/modules/deliveries/delivery-pricing.helper';
 
 const prisma = new PrismaClient();
 
@@ -14,8 +15,6 @@ async function main() {
     { name: 'ADMIN', displayName: 'Administrateur', isSystem: false, description: 'Gestionnaire délégué de boutique' },
     { name: 'MARKETING', displayName: 'Marketing', isSystem: false, description: 'Catalogue (sans suppression), Communauté (Notifications & Contact sans Support) et Espace Client' },
     { name: 'CLIENT', displayName: 'Client', isSystem: true, description: 'Client final e-commerce' },
-    { name: 'DELIVERY_MANAGER', displayName: 'Responsable Livraisons', isSystem: false, description: 'Gestionnaire de la logistique' },
-    { name: 'DELIVERY_AGENT', displayName: 'Livreur', isSystem: false, description: 'Agent de livraison terrain' },
     { name: 'STOCK_MANAGER', displayName: 'Gestionnaire de Stock', isSystem: false, description: 'Responsable inventaire et entrepôts' },
     { name: 'CASHIER', displayName: 'Caissier POS', isSystem: false, description: 'Opérateur caisse et point de vente' },
     { name: 'ACCOUNTANT', displayName: 'Comptable', isSystem: false, description: 'Responsable trésorerie et finances' },
@@ -33,7 +32,7 @@ async function main() {
   // 2. Permissions
   const modules = [
     'users', 'roles', 'permissions', 'products', 'categories', 'characteristics', 'variants', 'brands', 'suppliers',
-    'warehouses', 'inventory', 'pos', 'orders', 'customers', 'deliveries',
+    'warehouses', 'inventory', 'pos', 'orders', 'customers', 'deliveries', 'delivery_companies',
     'payments', 'treasury', 'accounting', 'expenses', 'reports', 'settings',
     'audit', 'reviews', 'coupons'
   ];
@@ -146,7 +145,6 @@ async function main() {
     { email: 'marketing@royal.com.tn', password: process.env.MARKETING_PASSWORD || process.env.ADMIN_PASSWORD || 'AdminStore2026!', firstName: 'Marketing', lastName: 'Royal', role: 'MARKETING' },
     { email: 'cashier@royal.com.tn', password: process.env.CASHIER_PASSWORD || 'Cashier2026!', firstName: 'Karim', lastName: 'Mejri', role: 'CASHIER' },
     { email: 'stock@royal.com.tn', password: process.env.STOCK_PASSWORD || 'Stock2026!', firstName: 'Youssef', lastName: 'Gharbi', role: 'STOCK_MANAGER' },
-    { email: 'delivery@royal.com.tn', password: process.env.DELIVERY_PASSWORD || 'Delivery2026!', firstName: 'Mohamed', lastName: 'Zitouni', role: 'DELIVERY_MANAGER' },
     { email: 'client@royal.com.tn', password: process.env.CLIENT_PASSWORD || 'ClientPassword2026!', firstName: 'Amira', lastName: 'Trabelsi', role: 'CLIENT' },
   ];
 
@@ -260,9 +258,10 @@ async function main() {
   });
   console.log('🛒 POS Boutique & Cash Register created.');
 
-  const deliveryDefaults = await ensureDeliveryRoleDefaults(prisma, { force: false });
+  const seededCompanies = await ensureDefaultDeliveryCompanies(prisma);
+  const deliveryDocs = await ensureDeliverySystemDocumentDefaults(prisma);
   const viewsSync = await syncPermissionsViews(prisma);
-  console.log('🚚 Delivery defaults ready:', JSON.stringify(deliveryDefaults));
+  console.log('🚚 Delivery companies & doc defaults ready:', JSON.stringify({ seededCompanies, deliveryDocs }));
   console.log(`🧭 permissions_views synced: ${viewsSync.upsertedCount} records.`);
 
   console.log('✨ Core Royal infrastructure seeding completed successfully!');

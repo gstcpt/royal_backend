@@ -70,8 +70,7 @@ export const MODULE_FRENCH_LABELS: Record<string, string> = {
   financiers: 'Financiers',
   commercials: 'Commerciaux',
   marketing: 'Équipe Marketing',
-  delivery_managers: 'Responsables Livraison',
-  delivery_agents: 'Livreurs',
+  delivery_companies: 'Sociétés & Tarifs Livraison',
   clients: 'Clients (Comptes RBAC)',
   roles: 'Rôles RBAC',
   permissions: 'Permissions & Vues RBAC',
@@ -238,18 +237,6 @@ export const CANONICAL_RBAC_SECTIONS: CanonicalRbacSection[] = [
       {
         path: '/dashboard/users/marketing',
         labelFr: 'Marketing',
-        defaultPermissionCode: 'users.read',
-        visibility: 'PRIVATE',
-      },
-      {
-        path: '/dashboard/users/delivery-managers',
-        labelFr: 'Responsables Livraison',
-        defaultPermissionCode: 'users.read',
-        visibility: 'PRIVATE',
-      },
-      {
-        path: '/dashboard/users/delivery-agents',
-        labelFr: 'Livreurs',
         defaultPermissionCode: 'users.read',
         visibility: 'PRIVATE',
       },
@@ -421,8 +408,8 @@ export const CANONICAL_RBAC_SECTIONS: CanonicalRbacSection[] = [
     order: 8,
     key: 'sales',
     labelFr: 'Ventes et distribution',
-    descriptionFr: 'Clients, commandes, bons de livraison, retours et facturation.',
-    modules: ['customers', 'orders', 'deliveries', 'returns', 'invoices'],
+    descriptionFr: 'Clients, commandes, sociétés de livraison, bons de livraison, retours et facturation.',
+    modules: ['customers', 'orders', 'deliveries', 'delivery_companies', 'returns', 'invoices'],
     routes: [
       {
         path: '/dashboard/customers',
@@ -435,6 +422,12 @@ export const CANONICAL_RBAC_SECTIONS: CanonicalRbacSection[] = [
         labelFr: 'Commandes clients',
         defaultPermissionCode: 'orders.read',
         visibility: 'PUBLIC',
+      },
+      {
+        path: '/dashboard/delivery-companies',
+        labelFr: 'Sociétés & Tarifs de Livraison',
+        defaultPermissionCode: 'delivery_companies.read',
+        visibility: 'PRIVATE',
       },
       {
         path: '/dashboard/deliveries',
@@ -675,6 +668,12 @@ export const CANONICAL_RBAC_SECTIONS: CanonicalRbacSection[] = [
         visibility: 'PRIVATE',
       },
       {
+        path: '/dashboard/root/delivery-settings',
+        labelFr: 'Règles Livraison, Distances & Transferts',
+        defaultPermissionCode: 'settings.read',
+        visibility: 'PRIVATE',
+      },
+      {
         path: '/dashboard/root/storage',
         labelFr: 'Stockage Médias & CDN',
         defaultPermissionCode: 'settings.read',
@@ -741,8 +740,6 @@ const MODULE_PRIMARY_ROUTES: Record<string, Array<{ viewPath: string; viewLabelF
     { viewPath: '/dashboard/users', viewLabelFr: 'Tous les utilisateurs' },
     { viewPath: '/dashboard/users/admins', viewLabelFr: 'Administrateurs' },
     { viewPath: '/dashboard/users/marketing', viewLabelFr: 'Marketing' },
-    { viewPath: '/dashboard/users/delivery-managers', viewLabelFr: 'Responsables Livraison' },
-    { viewPath: '/dashboard/users/delivery-agents', viewLabelFr: 'Livreurs' },
     { viewPath: '/dashboard/users/clients', viewLabelFr: 'Clients (Comptes RBAC)' },
   ],
   superadmins: [{ viewPath: '/dashboard/root/superadmins', viewLabelFr: 'Super admin' }],
@@ -768,11 +765,17 @@ const MODULE_PRIMARY_ROUTES: Record<string, Array<{ viewPath: string; viewLabelF
     { viewPath: '/dashboard/inventory', viewLabelFr: 'Inventaire physique' },
     { viewPath: '/dashboard/inventory-documents', viewLabelFr: 'Ajustement' },
   ],
-  transfers: [{ viewPath: '/dashboard/transfers', viewLabelFr: 'Mouvements de stock' }],
+  transfers: [
+    { viewPath: '/dashboard/transfers', viewLabelFr: 'Mouvements de stock' },
+    { viewPath: '/dashboard/transfers/[id]', viewLabelFr: 'Détail Demande & Bon de Transfert' },
+  ],
   customers: [{ viewPath: '/dashboard/customers', viewLabelFr: 'Fiches clients' }],
   orders: [
     { viewPath: '/dashboard/orders', viewLabelFr: 'Commandes clients' },
     { viewPath: '/dashboard/orders/[id]', viewLabelFr: 'Détail commande client' },
+  ],
+  delivery_companies: [
+    { viewPath: '/dashboard/delivery-companies', viewLabelFr: 'Sociétés & Tarifs de Livraison' },
   ],
   deliveries: [{ viewPath: '/dashboard/deliveries', viewLabelFr: 'Bon de livraison (BL)' }],
   returns: [{ viewPath: '/dashboard/returns', viewLabelFr: 'Bon de retour (BR)' }],
@@ -802,6 +805,7 @@ const MODULE_PRIMARY_ROUTES: Record<string, Array<{ viewPath: string; viewLabelF
   email_templates: [{ viewPath: '/dashboard/root/email-templates', viewLabelFr: 'Modèles de courriels' }],
   settings: [
     { viewPath: '/dashboard/settings', viewLabelFr: 'Paramètres généraux' },
+    { viewPath: '/dashboard/root/delivery-settings', viewLabelFr: 'Règles Livraison, Distances & Transferts' },
     { viewPath: '/dashboard/root/smtp', viewLabelFr: 'Paramètres SMTP' },
     { viewPath: '/dashboard/root/tva', viewLabelFr: 'Taxe et timbre fiscal' },
     { viewPath: '/dashboard/root/reference-prefixes', viewLabelFr: 'Préfixes et numérotations' },
@@ -1134,143 +1138,4 @@ export async function syncPermissionsViews(prisma: PrismaClient, explicitRoot?: 
     discoveredControllerEndpointsCount: scan.discoveredControllerEndpoints.length,
     unregisteredFrontendRoutes: scan.unregisteredFrontendRoutes,
   };
-}
-
-export const DELIVERY_ROLE_DEFAULTS: Record<
-  'DELIVERY_MANAGER' | 'DELIVERY_AGENT',
-  {
-    permissions: Record<string, string[]>;
-    views: string[];
-  }
-> = {
-  DELIVERY_MANAGER: {
-    permissions: {
-      deliveries: ['read', 'read_list', 'read_detail', 'create', 'update', 'manage'],
-      orders: ['read', 'read_list', 'read_detail', 'update'],
-      returns: ['read', 'read_list', 'read_detail', 'create', 'update'],
-      customers: ['read', 'read_list', 'read_detail'],
-      warehouses: ['read', 'read_list', 'read_detail'],
-      transfers: ['read', 'read_list', 'read_detail', 'create', 'update'],
-      invoices: ['read', 'read_list', 'read_detail'],
-      notifications: ['read', 'read_list', 'read_detail', 'create', 'update'],
-      users: ['read', 'read_list', 'read_detail'],
-    },
-    views: [
-      '/dashboard',
-      '/dashboard/community/notifications',
-      '/dashboard/customers',
-      '/dashboard/orders',
-      '/dashboard/deliveries',
-      '/dashboard/returns',
-      '/dashboard/invoices',
-      '/dashboard/warehouses',
-      '/dashboard/transfers',
-      '/dashboard/users/delivery-agents',
-      '/account/notifications',
-    ],
-  },
-  DELIVERY_AGENT: {
-    permissions: {
-      deliveries: ['read', 'read_list', 'read_detail', 'update'],
-      orders: ['read', 'read_list', 'read_detail', 'update'],
-      returns: ['read', 'read_list', 'read_detail'],
-      customers: ['read', 'read_list', 'read_detail'],
-      notifications: ['read', 'read_list', 'read_detail', 'update'],
-    },
-    views: [
-      '/dashboard',
-      '/dashboard/community/notifications',
-      '/dashboard/orders',
-      '/dashboard/deliveries',
-      '/dashboard/returns',
-      '/account/notifications',
-    ],
-  },
-};
-
-export async function ensureDeliveryRoleDefaults(
-  prisma: PrismaClient,
-  options: { force?: boolean } = {},
-) {
-  const summary: Record<string, { permissionsAssigned: number; viewsAssigned: number; skipped: boolean }> = {};
-  const allPerms = await prisma.permission.findMany({
-    select: { id: true, module: true, action: true },
-  });
-
-  let roleViewsSetting = await prisma.settings.findUnique({ where: { key: 'sys.roleViews' } });
-  let roleViewsObj: Record<string, string[]> = {};
-  if (roleViewsSetting?.value) {
-    try {
-      const parsed =
-        typeof roleViewsSetting.value === 'string'
-          ? JSON.parse(roleViewsSetting.value)
-          : roleViewsSetting.value;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        roleViewsObj = { ...(parsed as Record<string, string[]>) };
-      }
-    } catch {
-      roleViewsObj = {};
-    }
-  }
-
-  let roleViewsDirty = false;
-
-  for (const roleName of ['DELIVERY_MANAGER', 'DELIVERY_AGENT'] as const) {
-    const role = await prisma.role.findUnique({
-      where: { name: roleName },
-      include: { _count: { select: { rolePermissions: true } } },
-    });
-    if (!role) {
-      summary[roleName] = { permissionsAssigned: 0, viewsAssigned: 0, skipped: true };
-      continue;
-    }
-
-    const spec = DELIVERY_ROLE_DEFAULTS[roleName];
-    const shouldAssignPerms = options.force || role._count.rolePermissions === 0;
-    let assignedCount = 0;
-
-    if (shouldAssignPerms) {
-      const matchingPermIds = allPerms
-        .filter((p) => {
-          const allowedActions = spec.permissions[p.module];
-          return Boolean(allowedActions && allowedActions.includes(p.action));
-        })
-        .map((p) => p.id);
-
-      for (const permissionId of matchingPermIds) {
-        await prisma.rolePermission.upsert({
-          where: { roleId_permissionId: { roleId: role.id, permissionId } },
-          update: {},
-          create: { roleId: role.id, permissionId },
-        });
-        assignedCount++;
-      }
-    }
-
-    const existingViews = roleViewsObj[roleName];
-    const shouldAssignViews =
-      options.force || !Array.isArray(existingViews) || existingViews.length === 0;
-    let assignedViewsCount = 0;
-    if (shouldAssignViews) {
-      roleViewsObj[roleName] = [...spec.views];
-      assignedViewsCount = spec.views.length;
-      roleViewsDirty = true;
-    }
-
-    summary[roleName] = {
-      permissionsAssigned: assignedCount,
-      viewsAssigned: assignedViewsCount,
-      skipped: !shouldAssignPerms && !shouldAssignViews,
-    };
-  }
-
-  if (roleViewsDirty) {
-    await prisma.settings.upsert({
-      where: { key: 'sys.roleViews' },
-      update: { value: JSON.stringify(roleViewsObj), group: 'system' },
-      create: { key: 'sys.roleViews', value: JSON.stringify(roleViewsObj), group: 'system' },
-    });
-  }
-
-  return summary;
 }

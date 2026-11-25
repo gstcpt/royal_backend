@@ -153,4 +153,19 @@ export class CreateOrderDto {
   @IsString()
   @IsOptional()
   warehouseId?: string;
+
+  @ApiPropertyOptional({ description: 'Type de traitement : DELIVERY ou SHOWROOM_PICKUP', default: 'DELIVERY' })
+  @IsString()
+  @IsOptional()
+  fulfillmentType?: 'DELIVERY' | 'SHOWROOM_PICKUP' = 'DELIVERY';
+
+  @ApiPropertyOptional({ description: 'Identifiant société de livraison choisie au checkout' })
+  @IsString()
+  @IsOptional()
+  deliveryCompanyId?: string;
+
+  @ApiPropertyOptional({ description: 'Identifiant Showroom choisi pour retrait en magasin' })
+  @IsString()
+  @IsOptional()
+  pickupShowroomId?: string;
 }
