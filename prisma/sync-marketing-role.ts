@@ -139,36 +139,38 @@ async function main() {
     ]);
   }
 
-  // Verrouiller explicitement /dashboard/translations et /dashboard/users/marketing en PRIVATE (ROOT uniquement)
+  // Verrouiller explicitement /dashboard/translations et /dashboard/users/marketing en PRIVATE (format tableau sys.visibility préservé)
   const existingVis = await prisma.settings.findUnique({ where: { key: 'sys.visibility' } });
-  let visMap: Record<string, string> = {};
+  const lockedPrivateEntries = [
+    { key: '/dashboard/translations', label: 'Traductions i18n', section: 'Système & CMS' },
+    { key: '/dashboard/users/marketing', label: 'Marketing', section: 'Gestion des utilisateurs' },
+  ];
   if (existingVis?.value) {
     try {
       const parsed = JSON.parse(existingVis.value);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        visMap = parsed;
+      if (Array.isArray(parsed)) {
+        const nextList = parsed.map((entry: any) => ({ ...entry }));
+        for (const target of lockedPrivateEntries) {
+          const found = nextList.find((e) => e && e.key === target.key);
+          if (found) {
+            found.visibility = 'PRIVATE';
+          } else {
+            nextList.push({ ...target, visibility: 'PRIVATE' });
+          }
+        }
+        await prisma.settings.update({
+          where: { key: 'sys.visibility' },
+          data: {
+            value: JSON.stringify(nextList),
+            group: 'system',
+            updatedBy: 'SYNC_SCRIPT',
+          },
+        });
       }
     } catch {
-      visMap = {};
+      // Preserve untouched if unparseable
     }
   }
-  visMap['/dashboard/translations'] = 'PRIVATE';
-  visMap['/dashboard/users/marketing'] = 'PRIVATE';
-  await prisma.settings.upsert({
-    where: { key: 'sys.visibility' },
-    update: {
-      value: JSON.stringify(visMap),
-      group: 'system',
-      updatedBy: 'SYNC_SCRIPT',
-    },
-    create: {
-      key: 'sys.visibility',
-      value: JSON.stringify(visMap),
-      group: 'system',
-      isSecret: false,
-      updatedBy: 'SYNC_SCRIPT',
-    },
-  });
 
   console.log(
     `[OK] Role MARKETING (${role.id}) synchronisé avec ${targetPermissionIds.length} permissions, ${MARKETING_DEFAULT_VIEWS.length} vues autorisées, bascule compte marketing@royal.com.tn=${Boolean(marketingUser)}, et visibilité PRIVATE verrouillée.`,
