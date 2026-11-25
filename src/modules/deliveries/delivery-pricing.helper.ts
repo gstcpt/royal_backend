@@ -20,6 +20,7 @@ export interface CustomDistanceOverride {
 export interface SystemDeliverySettings {
   defaultItemWeightKg: number;
   applyFreeShippingThreshold: boolean;
+  freeShippingMigrationApplied?: boolean;
   outOfRangeBehavior: 'FALLBACK_FIXED' | 'UNAVAILABLE';
   autoCreateShowroomTransfer: boolean;
   defaultTransferAcceptanceMode: 'CHOICE' | 'IMMEDIATE' | 'STEP_BY_STEP';
@@ -128,7 +129,8 @@ export const DEFAULT_WEIGHT_BRACKETS: PricingBracket[] = [
 
 export const DEFAULT_DELIVERY_SETTINGS: SystemDeliverySettings = {
   defaultItemWeightKg: 1,
-  applyFreeShippingThreshold: false,
+  applyFreeShippingThreshold: true,
+  freeShippingMigrationApplied: true,
   outOfRangeBehavior: 'FALLBACK_FIXED',
   autoCreateShowroomTransfer: true,
   defaultTransferAcceptanceMode: 'CHOICE',
@@ -516,7 +518,7 @@ export async function ensureDeliverySystemDocumentDefaults(prisma: PrismaClient)
     }
   }
 
-  // 3. Ensure sys.deliverySettings exists
+  // 3. Ensure sys.deliverySettings exists (and apply one-time free-shipping threshold default migration)
   const delSettingsRow = await prisma.settings.findUnique({ where: { key: 'sys.deliverySettings' } });
   if (!delSettingsRow) {
     await prisma.settings.create({
@@ -526,6 +528,27 @@ export async function ensureDeliverySystemDocumentDefaults(prisma: PrismaClient)
         group: 'system',
       },
     });
+  } else if (delSettingsRow.value) {
+    try {
+      const parsed =
+        typeof delSettingsRow.value === 'string'
+          ? JSON.parse(delSettingsRow.value)
+          : delSettingsRow.value;
+      if (parsed && typeof parsed === 'object' && parsed.freeShippingMigrationApplied !== true) {
+        const migrated = {
+          ...DEFAULT_DELIVERY_SETTINGS,
+          ...parsed,
+          applyFreeShippingThreshold: true,
+          freeShippingMigrationApplied: true,
+        };
+        await prisma.settings.update({
+          where: { key: 'sys.deliverySettings' },
+          data: { value: JSON.stringify(migrated) },
+        });
+      }
+    } catch {
+      // ignore invalid JSON
+    }
   }
 
   // 4. Keep sys.visibility clean (remove delivery-managers/agents; add delivery-companies & root/delivery-settings as PRIVATE)

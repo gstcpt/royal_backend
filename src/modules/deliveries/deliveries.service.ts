@@ -57,6 +57,7 @@ export class DeliveriesService implements OnModuleInit {
         payload.applyFreeShippingThreshold !== undefined
           ? Boolean(payload.applyFreeShippingThreshold)
           : current.applyFreeShippingThreshold,
+      freeShippingMigrationApplied: true,
       outOfRangeBehavior:
         payload.outOfRangeBehavior === 'UNAVAILABLE' || payload.outOfRangeBehavior === 'FALLBACK_FIXED'
           ? payload.outOfRangeBehavior
@@ -312,16 +313,22 @@ export class DeliveriesService implements OnModuleInit {
     const destCountry = (dto.destinationCountry || 'TN').trim().toUpperCase();
     const destState = (dto.destinationState || 'Tunis').trim();
 
-    let freeShippingActive = false;
+    let thresholdReached = false;
     if (settings.applyFreeShippingThreshold && dto.subtotalTnd !== undefined) {
       const thrSetting = await this.prisma.settings.findUnique({
         where: { key: 'shipping.free_threshold' },
       });
-      const thr = Number(thrSetting?.value ?? 300);
+      const thr = Number(thrSetting?.value ?? 150);
       if (Number(dto.subtotalTnd) >= thr && Number(dto.subtotalTnd) > 0) {
-        freeShippingActive = true;
+        thresholdReached = true;
       }
     }
+    const freeShippingActive = Boolean(dto.freeShippingCoupon) || thresholdReached;
+    const freeShippingReason = dto.freeShippingCoupon
+      ? 'COUPON'
+      : thresholdReached
+        ? 'THRESHOLD'
+        : null;
 
     const companies = await this.prisma.deliveryCompany.findMany({
       where: dto.includeInactive ? {} : { isActive: true },
@@ -392,9 +399,14 @@ export class DeliveriesService implements OnModuleInit {
         method: company.defaultMethod,
         distanceKm,
         totalWeightKg,
-        matchedBracketLabel: freeShippingActive ? 'Livraison gratuite (seuil atteint)' : matchedLabel,
+        matchedBracketLabel: freeShippingActive
+          ? dto.freeShippingCoupon
+            ? 'Livraison offerte (Code promo)'
+            : 'Livraison gratuite (seuil atteint)'
+          : matchedLabel,
         usedFallback,
         available: finalFee !== null,
+        originalFeeTnd: price !== null ? Number(Number(price).toFixed(3)) : null,
         feeTnd: finalFee !== null ? Number(Number(finalFee).toFixed(3)) : null,
       };
     });
@@ -404,6 +416,7 @@ export class DeliveriesService implements OnModuleInit {
       destinationState: destState,
       totalWeightKg,
       freeShippingActive,
+      freeShippingReason,
       quotes,
     };
   }

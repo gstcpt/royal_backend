@@ -150,6 +150,7 @@ export class OrdersService {
     // 4. Calculate promotions & shipping
     let discountAmount = new Decimal(0);
     let appliedCoupon: any = null;
+    let isFreeShippingCoupon = false;
 
     if (dto.couponCode) {
       const couponValRes = await this.couponsService.validate({
@@ -167,7 +168,8 @@ export class OrdersService {
 
       if (couponValRes.valid) {
         appliedCoupon = couponValRes.coupon;
-        discountAmount = new Decimal(couponValRes.discountAmount);
+        isFreeShippingCoupon = Boolean(couponValRes.freeShipping || couponValRes.coupon?.type === 'FREE_SHIPPING');
+        discountAmount = isFreeShippingCoupon ? new Decimal(0) : new Decimal(couponValRes.discountAmount);
       }
     }
 
@@ -205,6 +207,7 @@ export class OrdersService {
         destinationState: dto.shippingAddress?.state || 'Tunis',
         items: dto.items.map((it) => ({ variantId: it.variantId, quantity: it.quantity })),
         subtotalTnd: subtotalAfterDiscount.toNumber(),
+        freeShippingCoupon: isFreeShippingCoupon,
       });
 
       const activeQuotes = quoteRes.quotes.filter((q) => q.available && q.feeTnd !== null);
@@ -213,7 +216,9 @@ export class OrdersService {
           ? activeQuotes.find((q) => q.companyId === dto.deliveryCompanyId)
           : null) || activeQuotes[0];
 
-      if (selectedQuote && selectedQuote.feeTnd !== null) {
+      if (isFreeShippingCoupon) {
+        shippingAmount = new Decimal(0);
+      } else if (selectedQuote && selectedQuote.feeTnd !== null) {
         shippingAmount = new Decimal(selectedQuote.feeTnd);
       } else {
         const shipSettings = await this.prisma.settings.findMany({

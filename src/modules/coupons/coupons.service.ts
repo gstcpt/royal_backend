@@ -348,6 +348,7 @@ export class CouponsService {
     // Calculate discount on eligible amount
     let discountAmount = new Decimal(0);
     const couponVal = new Decimal(coupon.value);
+    const isFreeShipping = coupon.type === CouponType.FREE_SHIPPING;
 
     if (coupon.type === CouponType.PERCENTAGE) {
       discountAmount = eligibleAmount.times(couponVal).dividedBy(100);
@@ -356,9 +357,9 @@ export class CouponsService {
       }
     } else if (coupon.type === CouponType.FIXED_AMOUNT) {
       discountAmount = Decimal.min(eligibleAmount, couponVal);
-    } else if (coupon.type === CouponType.FREE_SHIPPING) {
-      const feeSetting = await this.prisma.settings.findUnique({ where: { key: 'shipping.standard_fee' } });
-      discountAmount = new Decimal(Number(feeSetting?.value ?? 7.0));
+    } else if (isFreeShipping) {
+      // FREE_SHIPPING grants 0 TND shipping fee — never subtract a flat fee from product prices
+      discountAmount = new Decimal(0);
     }
 
     const netTotal = Decimal.max(0, orderAmount.minus(discountAmount));
@@ -374,6 +375,7 @@ export class CouponsService {
       },
       discountAmount: discountAmount.toNumber(),
       netTotal: netTotal.toNumber(),
+      freeShipping: isFreeShipping,
     };
   }
 }

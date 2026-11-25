@@ -172,6 +172,11 @@ export class CalculateDeliveryQuoteDto {
   @IsOptional()
   @IsBoolean()
   includeInactive?: boolean = false;
+
+  @ApiPropertyOptional({ description: 'Coupon livraison offerte appliqué au panier (FREE_SHIPPING)' })
+  @IsOptional()
+  @IsBoolean()
+  freeShippingCoupon?: boolean = false;
 }
 
 export class CheckShowroomsAvailabilityDto {
