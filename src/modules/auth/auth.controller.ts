@@ -138,6 +138,14 @@ export class AuthController {
   }
 
   @Public()
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Envoyer un courriel de procédure de récupération de mot de passe' })
+  async forgotPassword(@Body() dto: ResendVerificationDto) {
+    return this.authService.requestPasswordResetEmail(dto.email);
+  }
+
+  @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rafraîchissement du jeton d’accès avec rotation' })

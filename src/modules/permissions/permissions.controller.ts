@@ -27,6 +27,28 @@ export class PermissionsController {
     return this.permissionsService.findAll();
   }
 
+  @Get('views')
+  @Permissions('roles.read')
+  @ApiOperation({ summary: 'Liste des correspondances permissions_views ordonnées 1..13' })
+  @ApiResponse({ status: 200, description: 'Table permissions_views' })
+  async listViews() {
+    return this.permissionsService.listPermissionViews();
+  }
+
+  @Post('scan-sync-views')
+  @Permissions('roles.permissions.assign')
+  @ApiOperation({ summary: 'Scanner routes frontend + controllers backend et synchroniser permissions_views' })
+  async scanAndSyncViews() {
+    return this.permissionsService.scanAndSyncViews();
+  }
+
+  @Post('assign-delivery-defaults')
+  @Permissions('roles.permissions.assign')
+  @ApiOperation({ summary: 'Attribuer les permissions et vues par défaut à DELIVERY_MANAGER et DELIVERY_AGENT' })
+  async assignDeliveryDefaults(@Body() body?: { force?: boolean }) {
+    return this.permissionsService.assignDeliveryDefaults(Boolean(body?.force));
+  }
+
   @Get('module/:name')
   @Permissions('roles.read')
   @ApiOperation({ summary: 'Liste des permissions pour un module spécifique' })

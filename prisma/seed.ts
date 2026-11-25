@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import * as argon2 from 'argon2';
+import { ensureDeliveryRoleDefaults, syncPermissionsViews } from '../src/modules/permissions/rbac-scanner.helper';
 
 const prisma = new PrismaClient();
 
@@ -258,6 +259,11 @@ async function main() {
     },
   });
   console.log('🛒 POS Boutique & Cash Register created.');
+
+  const deliveryDefaults = await ensureDeliveryRoleDefaults(prisma, { force: false });
+  const viewsSync = await syncPermissionsViews(prisma);
+  console.log('🚚 Delivery defaults ready:', JSON.stringify(deliveryDefaults));
+  console.log(`🧭 permissions_views synced: ${viewsSync.upsertedCount} records.`);
 
   console.log('✨ Core Royal infrastructure seeding completed successfully!');
 }

@@ -9,7 +9,15 @@ import * as path from 'path';
 import * as net from 'net';
 import { PrismaService } from '../../database/prisma.service';
 import { storeMediaAsset } from './utils/media-storage.helper';
-import { buildDocumentPdfBuffer, sendSmtpMailWithAttachments } from './utils/pdf-smtp.helper';
+import { buildDocumentPdfBuffer } from './utils/pdf-smtp.helper';
+import {
+  buildCustomNoteBlock,
+  DEFAULT_LUXURY_EMAIL_TEMPLATES,
+  ensureLuxuryEmailTemplateDefaults,
+  normalizeEmailLocale,
+  renderLocalizedEmail,
+  sendLoggedSmtpEmail,
+} from './utils/email-template.helper';
 import {
   generateAiCompletion,
   runResilientAiFailoverLoop,
@@ -26,7 +34,12 @@ import {
   CreateProductReviewDto,
   CreateSupportMessageDto,
   ModerateReviewDto,
+  PreviewEmailTemplateDto,
+  ReplyContactEmailDto,
   ReplySupportThreadDto,
+  SendDeliveryDocumentsDto,
+  SendNewsletterCampaignDto,
+  SendTestEmailTemplateDto,
   SmtpTestDto,
   SubscribeNewsletterDto,
   ToggleReactionDto,
@@ -1319,9 +1332,25 @@ export class StorefrontCmsService {
   }
 
   async listNewsletterSubscribers() {
-    return this.prisma.newsletterSubscriber.findMany({
+    const subscribers = await this.prisma.newsletterSubscriber.findMany({
       orderBy: { createdAt: 'desc' },
     });
+    if (subscribers.length === 0) return [];
+    const emails = subscribers.map((s) => s.email.toLowerCase());
+    const sentLogs = await this.prisma.emailLog.groupBy({
+      by: ['to'],
+      where: {
+        status: 'SENT',
+        to: { in: emails },
+        template: { key: { startsWith: 'campaign:' } },
+      },
+      _count: { id: true },
+    });
+    const countByEmail = new Map(sentLogs.map((l) => [l.to.toLowerCase(), l._count.id]));
+    return subscribers.map((s) => ({
+      ...s,
+      campaignsReceived: countByEmail.get(s.email.toLowerCase()) || 0,
+    }));
   }
 
   async toggleNewsletterSubscriber(id: string) {
@@ -3470,57 +3499,7 @@ export class StorefrontCmsService {
   }
 
   private async ensureDefaultEmailTemplates() {
-    const count = await this.prisma.emailTemplate.count();
-    if (count > 0) return;
-    const defaults = [
-      {
-        key: 'auth:welcome',
-        name: 'Bienvenue Nouveau Client',
-        subject: 'Bienvenue chez {{appName}}, {{firstName}} !',
-        bodyHtml: '<p>Bonjour {{firstName}},</p><p>Votre compte Royal est activé. Profitez de nos nouveautés électroménager.</p>',
-        variables: ['{{appName}}', '{{firstName}}', '{{lastName}}', '{{email}}'],
-      },
-      {
-        key: 'auth:forgot_password',
-        name: 'Mot de Passe Oublié / Réinitialisation',
-        subject: 'Réinitialisation de votre mot de passe Royal',
-        bodyHtml: '<p>Bonjour {{firstName}},</p><p>Cliquez ici pour réinitialiser votre mot de passe : {{resetLink}} (valide {{expireTime}}).</p>',
-        variables: ['{{firstName}}', '{{resetLink}}', '{{expireTime}}'],
-      },
-      {
-        key: 'auth:verify_email',
-        name: 'Confirmation d’Adresse Email',
-        subject: 'Confirmez votre adresse email — Royal',
-        bodyHtml: '<p>Bonjour {{firstName}},</p><p>Veuillez confirmer votre email via le lien : {{verifyLink}}.</p>',
-        variables: ['{{firstName}}', '{{verifyLink}}'],
-      },
-      {
-        key: 'campaign:promo_general',
-        name: 'Campagne Promotion & Black Friday',
-        subject: 'Offres Exclusives Royal : Jusqu’à -{{discountPercent}}% !',
-        bodyHtml: '<p>Découvrez nos promotions sur une sélection d’appareils Royal & DSP. Code : <strong>{{promoCode}}</strong>.</p>',
-        variables: ['{{firstName}}', '{{discountPercent}}', '{{promoCode}}', '{{campaignUrl}}'],
-      },
-      {
-        key: 'messages:support_reply',
-        name: 'Réponse Support & Formulaire Contact',
-        subject: 'Re: {{subject}} — Service Client Royal',
-        bodyHtml: '<p>Bonjour {{customerName}},</p><p>{{replyBody}}</p><p>Cordialement,<br/>Équipe Support Royal</p>',
-        variables: ['{{customerName}}', '{{subject}}', '{{replyBody}}'],
-      },
-      {
-        key: 'orders:status_update',
-        name: 'Suivi & Changement Statut Commande',
-        subject: 'Votre commande #{{orderNumber}} : {{statusLabel}}',
-        bodyHtml: '<p>Merci {{firstName}} pour votre confiance.</p><p>Statut actuel de votre commande #{{orderNumber}} : <strong>{{statusLabel}}</strong>.</p>',
-        variables: ['{{firstName}}', '{{orderNumber}}', '{{statusLabel}}', '{{trackingUrl}}'],
-      },
-    ];
-    for (const d of defaults) {
-      await this.prisma.emailTemplate.create({
-        data: { ...d, isActive: true, variables: d.variables as any },
-      });
-    }
+    await ensureLuxuryEmailTemplateDefaults(this.prisma);
   }
 
   async listEmailTemplates() {
@@ -3566,6 +3545,300 @@ export class StorefrontCmsService {
 
   async deleteEmailTemplate(id: string) {
     return this.prisma.emailTemplate.delete({ where: { id } });
+  }
+
+  async resetEmailTemplateDefault(id: string) {
+    const existing = await this.prisma.emailTemplate.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Modèle e-mail introuvable.');
+    const seed = DEFAULT_LUXURY_EMAIL_TEMPLATES.find((d) => d.key === existing.key);
+    if (!seed) {
+      throw new BadRequestException('Ce modèle personnalisé ne possède pas de version usine par défaut.');
+    }
+    return this.prisma.emailTemplate.update({
+      where: { id },
+      data: {
+        name: seed.name,
+        subject: seed.subject,
+        subjectAr: seed.subjectAr,
+        bodyHtml: seed.bodyHtml,
+        bodyHtmlAr: seed.bodyHtmlAr,
+        variables: seed.variables as any,
+      },
+    });
+  }
+
+  async previewEmailTemplate(dto: PreviewEmailTemplateDto) {
+    const locale = normalizeEmailLocale(dto.locale);
+    const rendered = await renderLocalizedEmail(this.prisma, {
+      templateId: dto.templateId,
+      templateKey: dto.templateKey,
+      locale,
+      customSubject: dto.customSubject,
+      customBodyHtml: dto.customBodyHtml,
+      variables: {
+        firstName: 'Sami',
+        lastName: 'Ben Salem',
+        customerName: 'Sami Ben Salem',
+        email: 'sami.client@exemple.tn',
+        otpCode: '482910',
+        generatedPassword: 'Royal#2026!',
+        orderNumber: 'CMD-2026-0412',
+        statusLabel: locale === 'AR' ? 'قيد التوصيل' : 'En cours de livraison',
+        totalAmount: '1 290.000 TND',
+        documentsList: locale === 'AR' ? 'فاتورة + وصل تسليم' : 'Facture (FAC) + Bon de Livraison (BL)',
+        subject: locale === 'AR' ? 'استفسار حول الضمان' : 'Demande d’informations produit',
+        replyBody:
+          locale === 'AR'
+            ? 'مرحباً، نؤكد لكم توفر المنتج مع ضمان رسمي لمدة سنتين.'
+            : 'Bonjour, nous vous confirmons la disponibilité immédiate de l’article avec garantie officielle de 2 ans.',
+        messageBody:
+          locale === 'AR'
+            ? 'اكتشفوا مجموعتنا الجديدة من الأجهزة الكهرومنزلية الفاخرة بأسعار استثنائية.'
+            : 'Découvrez notre sélection d’appareils électroménagers haut de gamme à prix privilège.',
+        promoCode: 'ROYALVIP',
+        discountPercent: '20',
+        customNote: dto.variables?.customNote || '',
+        customNoteBlock: buildCustomNoteBlock(dto.variables?.customNote, locale),
+        ...(dto.variables || {}),
+      },
+    });
+    return {
+      subject: rendered.subject,
+      htmlBody: rendered.htmlBody,
+      innerHtml: rendered.innerHtml,
+      locale: rendered.locale,
+      templateId: rendered.templateId,
+      templateKey: rendered.templateKey,
+      templateName: rendered.templateName,
+    };
+  }
+
+  async sendTestEmailTemplate(dto: SendTestEmailTemplateDto, actorEmail: string) {
+    const preview = await this.previewEmailTemplate(dto);
+    const identity = preview;
+    const mailRes = await sendLoggedSmtpEmail(this.prisma, {
+      to: dto.to.trim(),
+      subject: preview.subject,
+      htmlBody: preview.htmlBody,
+      templateId: preview.templateId,
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorEmail,
+        action: 'SEND_EMAIL_TEMPLATE_TEST',
+        resourceType: 'EMAIL_TEMPLATE',
+        resourceId: identity.templateId || 'CUSTOM',
+        tableName: 'EmailTemplate',
+        description: `Test e-mail (${preview.locale}) envoyé à ${dto.to.trim()}`,
+      },
+    });
+    return {
+      ok: mailRes.accepted,
+      to: dto.to.trim(),
+      locale: preview.locale,
+      subject: preview.subject,
+      message: `E-mail de test (${preview.locale}) transmis avec succès à ${dto.to.trim()}.`,
+    };
+  }
+
+  async listEmailLogs(limit = 50) {
+    const take = Math.min(200, Math.max(1, Number(limit) || 50));
+    return this.prisma.emailLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take,
+      include: {
+        template: { select: { id: true, key: true, name: true } },
+      },
+    });
+  }
+
+  async replyContactWithEmail(id: string, dto: ReplyContactEmailDto, actorEmail: string) {
+    const existing = await this.prisma.contactSubmission.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Message de contact introuvable.');
+
+    const updated = await this.prisma.contactSubmission.update({
+      where: { id },
+      data: {
+        replyContent: dto.replyContent.trim(),
+        repliedAt: new Date(),
+        status: 'REPLIED',
+        isRead: true,
+      },
+    });
+
+    const targetEmail = String(dto.recipientEmail || existing.email || '').trim();
+    const shouldSendEmail = dto.sendEmail !== false;
+    let emailSent = false;
+
+    if (shouldSendEmail) {
+      if (!targetEmail || !targetEmail.includes('@') || targetEmail.endsWith('@client.royal.com.tn')) {
+        throw new BadRequestException(
+          'Réponse enregistrée, mais aucune adresse e-mail réelle valide n’est associée à ce contact pour l’envoi SMTP.',
+        );
+      }
+      const locale = normalizeEmailLocale(dto.locale);
+      const rendered = await renderLocalizedEmail(this.prisma, {
+        templateId: dto.templateId,
+        templateKey: dto.templateKey || 'messages:support_reply',
+        locale,
+        customSubject: dto.customSubject,
+        badgeText: locale === 'AR' ? 'رد خدمة الحرفاء' : 'Réponse Officielle Royal',
+        variables: {
+          customerName: existing.fullName,
+          subject: existing.subject || (locale === 'AR' ? 'طلبكم' : 'Votre message'),
+          replyBody: dto.replyContent.trim(),
+        },
+      });
+      await sendLoggedSmtpEmail(this.prisma, {
+        to: targetEmail,
+        subject: rendered.subject,
+        htmlBody: rendered.htmlBody,
+        templateId: rendered.templateId,
+        smtpCfg: rendered.identity.smtpCfg,
+      });
+      emailSent = true;
+      await this.prisma.auditLog.create({
+        data: {
+          actorEmail,
+          action: 'REPLY_CONTACT_EMAIL',
+          resourceType: 'CONTACT',
+          resourceId: existing.id,
+          tableName: 'ContactSubmission',
+          description: `Réponse e-mail (${locale}) envoyée à ${targetEmail}`,
+        },
+      });
+    }
+
+    return {
+      contact: updated,
+      emailSent,
+      to: targetEmail || null,
+      locale: normalizeEmailLocale(dto.locale),
+      message: emailSent
+        ? `Réponse enregistrée et envoyée par e-mail à ${targetEmail}.`
+        : 'Réponse enregistrée dans le dossier.',
+    };
+  }
+
+  async sendNewsletterCampaign(dto: SendNewsletterCampaignDto, actorEmail: string) {
+    const locale = normalizeEmailLocale(dto.locale);
+    const targetMode = dto.target || 'ACTIVE';
+
+    let recipients: Array<{ id: string | null; email: string }> = [];
+    if (targetMode === 'TEST') {
+      const testAddr = String(dto.testEmail || '').trim().toLowerCase();
+      if (!testAddr || !testAddr.includes('@')) {
+        throw new BadRequestException('Adresse e-mail de test invalide.');
+      }
+      recipients = [{ id: null, email: testAddr }];
+    } else if (targetMode === 'SELECTED') {
+      const ids = Array.from(new Set((dto.subscriberIds || []).filter(Boolean)));
+      if (ids.length === 0) {
+        throw new BadRequestException('Sélectionnez au moins un abonné pour cet envoi.');
+      }
+      const rows = await this.prisma.newsletterSubscriber.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, email: true },
+      });
+      recipients = rows;
+    } else {
+      recipients = await this.prisma.newsletterSubscriber.findMany({
+        where: { isActive: true },
+        select: { id: true, email: true },
+      });
+    }
+
+    if (recipients.length === 0) {
+      throw new BadRequestException('Aucun destinataire trouvé pour cette campagne.');
+    }
+
+    const emails = recipients.map((r) => r.email.toLowerCase());
+    const customers = await this.prisma.customer.findMany({
+      where: { email: { in: emails } },
+      select: { email: true, firstName: true, lastName: true },
+    });
+    const customerMap = new Map(customers.map((c) => [c.email.toLowerCase(), c]));
+
+    const baseRendered = await renderLocalizedEmail(this.prisma, {
+      templateId: dto.templateId,
+      templateKey: dto.templateKey || 'campaign:promo_general',
+      locale,
+      wrapInShell: false,
+      variables: {
+        firstName: locale === 'AR' ? 'حريفنا الكريم' : 'Chère cliente, cher client',
+        messageBody: dto.bodyHtml,
+        promoCode: dto.promoCode || 'ROYALVIP',
+        discountPercent: dto.discountPercent || '15',
+        campaignUrl: dto.campaignUrl || undefined,
+      },
+    });
+    const smtpCfg = baseRendered.identity.smtpCfg;
+
+    const errors: Array<{ email: string; error: string }> = [];
+    let sentCount = 0;
+
+    for (const r of recipients) {
+      const cust = customerMap.get(r.email.toLowerCase());
+      const greetingName =
+        cust?.firstName?.trim() || (locale === 'AR' ? 'حريفنا الكريم' : 'Chère cliente, cher client');
+      try {
+        const personalized = await renderLocalizedEmail(this.prisma, {
+          templateId: dto.templateId,
+          templateKey: dto.templateKey || 'campaign:promo_general',
+          locale,
+          customSubject: dto.subject,
+          customBodyHtml: dto.bodyHtml,
+          badgeText: locale === 'AR' ? 'حملة ترويجية' : 'Campagne Royal',
+          variables: {
+            firstName: greetingName,
+            lastName: cust?.lastName || '',
+            email: r.email,
+            messageBody: dto.bodyHtml,
+            promoCode: dto.promoCode || 'ROYALVIP',
+            discountPercent: dto.discountPercent || '15',
+            campaignUrl: dto.campaignUrl || undefined,
+          },
+        });
+        await sendLoggedSmtpEmail(this.prisma, {
+          to: r.email,
+          subject: personalized.subject,
+          htmlBody: personalized.htmlBody,
+          templateId: personalized.templateId,
+          smtpCfg,
+        });
+        sentCount++;
+      } catch (err: any) {
+        errors.push({ email: r.email, error: String(err?.message || err) });
+      }
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        actorEmail,
+        action: 'SEND_NEWSLETTER_CAMPAIGN',
+        resourceType: 'NEWSLETTER',
+        resourceId: baseRendered.templateId || 'CAMPAIGN',
+        tableName: 'NewsletterSubscriber',
+        description: `Campagne (${locale}) envoyée : ${sentCount}/${recipients.length} succès (${errors.length} échec)`,
+      },
+    });
+
+    if (sentCount === 0 && errors.length > 0) {
+      throw new BadRequestException(`Échec d’envoi SMTP : ${errors[0].error}`);
+    }
+
+    return {
+      ok: true,
+      locale,
+      totalTargets: recipients.length,
+      sentCount,
+      failedCount: errors.length,
+      errors: errors.slice(0, 10),
+      message:
+        targetMode === 'TEST'
+          ? `E-mail test de campagne (${locale}) envoyé à ${recipients[0].email}.`
+          : `Campagne (${locale}) transmise à ${sentCount}/${recipients.length} destinataire(s).`,
+    };
   }
 
   async listProspects() {
@@ -5905,12 +6178,7 @@ export class StorefrontCmsService {
 
   async sendOrderDeliveryDocuments(
     orderId: string,
-    dto: {
-      sendInvoice?: boolean;
-      sendDeliverySlip?: boolean;
-      customEmail?: string;
-      customNote?: string;
-    },
+    dto: SendDeliveryDocumentsDto,
     actorEmail: string,
   ) {
     const order = await this.prisma.order.findFirst({
@@ -6020,24 +6288,30 @@ export class StorefrontCmsService {
       docLabels.push(`Bon de Livraison (${deliveryRef})`);
     }
 
-    const htmlBody = `
-      <div style="font-family:Poppins,Arial,sans-serif;max-width:620px;margin:auto;border:1px solid #E6E1D6;border-radius:16px;padding:28px;background:#FFFFFF;color:#1D232E;">
-        <div style="border-bottom:3px solid #C59B27;padding-bottom:14px;margin-bottom:20px;">
-          <h2 style="margin:0;color:#1D232E;font-size:20px;">${commonOpts.companyName}</h2>
-          <p style="margin:4px 0 0;color:#9A7414;font-size:12px;font-weight:700;">Confirmation de livraison — Commande #${order.reference}</p>
-        </div>
-        <p style="font-size:14px;line-height:1.6;">Bonjour <strong>${customerName}</strong>,</p>
-        <p style="font-size:14px;line-height:1.6;">Votre commande <strong>#${order.reference}</strong> d'un montant total de <strong>${commonOpts.totalTnd.toFixed(3)} TND</strong> a bien été marquée comme <strong>livrée</strong>.</p>
-        <p style="font-size:13px;line-height:1.6;">Vous trouverez en pièces jointes les documents PDF correspondants : <strong>${docLabels.join(' et ')}</strong>.</p>
-        ${dto.customNote ? `<div style="background:#FBF9F4;border-left:3px solid #C59B27;padding:12px;margin:16px 0;font-size:13px;">${dto.customNote}</div>` : ''}
-        <p style="font-size:12px;color:#64748B;margin-top:24px;">Merci pour votre confiance — Service Client Royal (${ROYAL_CONTACT_INFO.phone}).</p>
-      </div>
-    `;
+    const locale = normalizeEmailLocale(dto.locale);
+    const rendered = await renderLocalizedEmail(this.prisma, {
+      templateId: dto.templateId,
+      templateKey: dto.templateKey || 'orders:status_update',
+      locale,
+      customSubject: dto.customSubject,
+      badgeText: locale === 'AR' ? 'تأكيد التوصيل' : 'Confirmation Livraison',
+      variables: {
+        customerName,
+        orderNumber: order.reference,
+        statusLabel: locale === 'AR' ? 'تم التوصيل' : 'Livrée',
+        totalAmount: `${commonOpts.totalTnd.toFixed(3)} TND`,
+        documentsList: docLabels.join(' + '),
+        customNote: dto.customNote || '',
+        customNoteBlock: buildCustomNoteBlock(dto.customNote, locale),
+      },
+    });
 
-    const mailRes = await sendSmtpMailWithAttachments(smtpCfg, {
+    const mailRes = await sendLoggedSmtpEmail(this.prisma, {
       to: recipientEmail,
-      subject: `Royal — Documents commande #${order.reference} (${docLabels.join(' + ')})`,
-      htmlBody,
+      subject: rendered.subject,
+      htmlBody: rendered.htmlBody,
+      templateId: rendered.templateId,
+      smtpCfg,
       attachments,
     });
 
@@ -6048,13 +6322,14 @@ export class StorefrontCmsService {
         resourceType: 'ORDER',
         resourceId: order.id,
         tableName: 'Order',
-        description: `Envoi manuel (${docLabels.join(', ')}) à ${recipientEmail}`,
+        description: `Envoi manuel (${locale} • ${docLabels.join(', ')}) à ${recipientEmail}`,
       },
     });
 
     return {
       ok: mailRes.accepted,
       to: recipientEmail,
+      locale,
       attachedDocuments: docLabels,
       message: mailRes.message,
     };

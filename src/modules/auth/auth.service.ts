@@ -16,7 +16,10 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SystemRole } from '@royal/shared-types';
-import { sendSmtpMailWithAttachments } from '../storefront-cms/utils/pdf-smtp.helper';
+import {
+  renderLocalizedEmail,
+  sendLoggedSmtpEmail,
+} from '../storefront-cms/utils/email-template.helper';
 import { invalidateSessionCache, invalidateUserSessionCache } from './strategies/jwt.strategy';
 
 @Injectable()
@@ -271,31 +274,28 @@ export class AuthService {
 
   private async sendVerificationEmail(email: string, firstName: string, code: string) {
     try {
-      const smtpRow = await this.prisma.settings.findUnique({ where: { key: 'sys.smtp' } });
-      const smtpCfg: any = smtpRow?.value ? JSON.parse(smtpRow.value) : {};
-      if (!smtpCfg?.host || !smtpCfg?.user || !smtpCfg?.password) {
+      const rendered = await renderLocalizedEmail(this.prisma, {
+        templateKey: 'auth:verify_email',
+        locale: 'FR',
+        badgeText: 'Vérification Compte',
+        variables: {
+          firstName: firstName || 'Client',
+          otpCode: code,
+          expireTime: '15 minutes',
+        },
+      });
+      if (!rendered.identity.smtpCfg?.host || !rendered.identity.smtpCfg?.user || !rendered.identity.smtpCfg?.password) {
         return {
           sent: false,
           reason: 'SMTP non configuré sur cet environnement. Contactez l’administrateur ou configurez /dashboard/root/smtp.',
         };
       }
-      await sendSmtpMailWithAttachments(smtpCfg, {
+      await sendLoggedSmtpEmail(this.prisma, {
         to: email,
-        subject: `Royal — Code de vérification de votre compte : ${code}`,
-        htmlBody: `
-          <div style="font-family:Poppins,Arial,sans-serif;max-width:560px;margin:auto;border:1px solid #E6E1D6;border-radius:16px;padding:28px;background:#FFFFFF;color:#1D232E;">
-            <div style="border-bottom:3px solid #C59B27;padding-bottom:12px;margin-bottom:20px;">
-              <h2 style="margin:0;color:#1D232E;font-size:20px;">Royal — Électro de Maison</h2>
-              <p style="margin:4px 0 0;color:#9A7414;font-size:12px;font-weight:700;">Vérification de votre adresse e-mail</p>
-            </div>
-            <p style="font-size:14px;">Bonjour <strong>${firstName}</strong>,</p>
-            <p style="font-size:13px;line-height:1.6;">Merci d'avoir créé un compte sur <strong>Royal</strong>. Pour activer votre espace client et empêcher les inscriptions frauduleuses, veuillez saisir le code de vérification ci-dessous (valable 15 minutes) :</p>
-            <div style="margin:22px 0;padding:16px;background:#FBF6E8;border:1px solid #E6D6A6;border-radius:12px;text-align:center;">
-              <span style="font-family:monospace;font-size:28px;font-weight:900;letter-spacing:8px;color:#9A7414;">${code}</span>
-            </div>
-            <p style="font-size:12px;color:#64748B;">Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail.</p>
-          </div>
-        `,
+        subject: rendered.subject,
+        htmlBody: rendered.htmlBody,
+        templateId: rendered.templateId,
+        smtpCfg: rendered.identity.smtpCfg,
       });
       return { sent: true };
     } catch (err: any) {
@@ -305,6 +305,65 @@ export class AuthService {
         reason: err?.message || 'Erreur lors de l’envoi de l’e-mail de vérification.',
       };
     }
+  }
+
+  async sendWelcomeEmail(email: string, firstName: string, lastName: string) {
+    try {
+      const rendered = await renderLocalizedEmail(this.prisma, {
+        templateKey: 'auth:welcome',
+        locale: 'FR',
+        badgeText: 'Bienvenue',
+        variables: {
+          firstName: firstName || 'Client',
+          lastName: lastName || '',
+          email,
+        },
+      });
+      if (!rendered.identity.smtpCfg?.host) return;
+      await sendLoggedSmtpEmail(this.prisma, {
+        to: email,
+        subject: rendered.subject,
+        htmlBody: rendered.htmlBody,
+        templateId: rendered.templateId,
+        smtpCfg: rendered.identity.smtpCfg,
+      });
+    } catch (err: any) {
+      this.logger.warn(`Welcome email skipped for ${email}: ${err?.message || err}`);
+    }
+  }
+
+  async requestPasswordResetEmail(emailRaw: string) {
+    const email = String(emailRaw || '').trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (user && !user.deletedAt && user.isActive) {
+      try {
+        const rendered = await renderLocalizedEmail(this.prisma, {
+          templateKey: 'auth:forgot_password',
+          locale: 'FR',
+          badgeText: 'Assistance Connexion',
+          variables: {
+            firstName: user.firstName || 'Client',
+            email: user.email,
+            expireTime: '15 minutes',
+          },
+        });
+        if (rendered.identity.smtpCfg?.host && rendered.identity.smtpCfg?.user && rendered.identity.smtpCfg?.password) {
+          await sendLoggedSmtpEmail(this.prisma, {
+            to: user.email,
+            subject: rendered.subject,
+            htmlBody: rendered.htmlBody,
+            templateId: rendered.templateId,
+            smtpCfg: rendered.identity.smtpCfg,
+          });
+        }
+      } catch (err: any) {
+        this.logger.warn(`Forgot password email error for ${email}: ${err?.message || err}`);
+      }
+    }
+    return {
+      success: true,
+      message: 'Si un compte est associé à cette adresse e-mail, les instructions viennent d’être envoyées.',
+    };
   }
 
   /**
@@ -464,6 +523,8 @@ export class AuthService {
         emailVerifyExp: null,
       },
     });
+
+    void this.sendWelcomeEmail(verifiedUser.email, verifiedUser.firstName, verifiedUser.lastName);
 
     return this.login(verifiedUser, metadata);
   }

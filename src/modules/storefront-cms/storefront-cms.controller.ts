@@ -29,10 +29,14 @@ import {
   CreateSupportMessageDto,
   FlouciInitDto,
   ModerateReviewDto,
+  PreviewEmailTemplateDto,
   ReorderFaqDto,
+  ReplyContactEmailDto,
   ReplySupportThreadDto,
   ResetCmsDefaultsDto,
   SendDeliveryDocumentsDto,
+  SendNewsletterCampaignDto,
+  SendTestEmailTemplateDto,
   SmtpTestDto,
   SubscribeNewsletterDto,
   TestMediaStorageDto,
@@ -171,6 +175,19 @@ export class StorefrontCmsController {
     return this.service.updateContact(id, dto);
   }
 
+  @Post('contacts/:id/reply')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('contacts:update|users:read')
+  @ApiOperation({ summary: 'Répondre à un contact avec modèle e-mail FR/AR et envoi SMTP' })
+  replyContactEmail(
+    @Param('id') id: string,
+    @Body() dto: ReplyContactEmailDto,
+    @Req() req: any,
+  ) {
+    return this.service.replyContactWithEmail(id, dto, req.user?.email || 'STAFF');
+  }
+
   @Delete('contacts/:id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -267,6 +284,15 @@ export class StorefrontCmsController {
   @ApiOperation({ summary: 'Supprimer un abonné newsletter' })
   deleteNewsletterSubscriber(@Param('id') id: string) {
     return this.service.deleteNewsletterSubscriber(id);
+  }
+
+  @Post('newsletters/send-campaign')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('newsletters:update|users:read')
+  @ApiOperation({ summary: 'Envoyer une campagne newsletter HTML (FR/AR) via SMTP' })
+  sendNewsletterCampaign(@Body() dto: SendNewsletterCampaignDto, @Req() req: any) {
+    return this.service.sendNewsletterCampaign(dto, req.user?.email || 'STAFF');
   }
 
   @Get('sales-report')
@@ -648,10 +674,45 @@ export class StorefrontCmsController {
 
   @Get('cms/email-templates')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:read')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Lister les modèles d’e-mails HTML (FR / AR) pour console et composition' })
   listEmailTemplates() {
     return this.service.listEmailTemplates();
+  }
+
+  @Post('cms/email-templates/preview')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Compiler un aperçu HTML Light Luxury (FR ou AR RTL) côté serveur' })
+  previewEmailTemplate(@Body() dto: PreviewEmailTemplateDto) {
+    return this.service.previewEmailTemplate(dto);
+  }
+
+  @Post('cms/email-templates/send-test')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:update')
+  @ApiOperation({ summary: 'Envoyer un e-mail de test HTML (FR ou AR) via SMTP' })
+  sendTestEmailTemplate(@Body() dto: SendTestEmailTemplateDto, @Req() req: any) {
+    return this.service.sendTestEmailTemplate(dto, req.user?.email || 'ROOT');
+  }
+
+  @Post('cms/email-templates/:id/reset-default')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:update')
+  @ApiOperation({ summary: 'Restaurer un modèle par défaut FR/AR Light Luxury' })
+  resetEmailTemplateDefault(@Param('id') id: string) {
+    return this.service.resetEmailTemplateDefault(id);
+  }
+
+  @Get('cms/email-logs')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Permissions('settings:read|audit:read')
+  @ApiOperation({ summary: 'Historique récent des envois e-mail SMTP (email_logs)' })
+  listEmailLogs(@Query('limit') limit?: string) {
+    return this.service.listEmailLogs(limit ? Number(limit) : 50);
   }
 
   @Post('cms/email-templates')

@@ -9,7 +9,10 @@ import {
 import * as crypto from 'crypto';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../../database/prisma.service';
-import { sendSmtpMailWithAttachments } from '../storefront-cms/utils/pdf-smtp.helper';
+import {
+  renderLocalizedEmail,
+  sendLoggedSmtpEmail,
+} from '../storefront-cms/utils/email-template.helper';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
@@ -812,30 +815,23 @@ export class UsersService {
     const generatedPassword = this.generateRandomSystemPassword(10);
 
     try {
-      await sendSmtpMailWithAttachments(smtpCfg, {
+      const rendered = await renderLocalizedEmail(this.prisma, {
+        templateKey: 'auth:password_reset_admin',
+        locale: 'FR',
+        badgeText: 'Sécurité Compte',
+        variables: {
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          generatedPassword,
+        },
+      });
+      await sendLoggedSmtpEmail(this.prisma, {
         to: user.email,
-        subject: 'Royal — Réinitialisation de votre mot de passe',
-        htmlBody: `
-          <div style="font-family:Poppins,Arial,sans-serif;max-width:560px;margin:auto;border:1px solid #E6E1D6;border-radius:16px;padding:28px;background:#FFFFFF;color:#1D232E;">
-            <div style="border-bottom:3px solid #C59B27;padding-bottom:12px;margin-bottom:20px;">
-              <h2 style="margin:0;color:#1D232E;font-size:20px;">Royal — Électro de Maison</h2>
-              <p style="margin:4px 0 0;color:#9A7414;font-size:12px;font-weight:700;">Nouveau mot de passe généré par l’administration</p>
-            </div>
-            <p style="font-size:14px;">Bonjour <strong>${user.firstName} ${user.lastName}</strong>,</p>
-            <p style="font-size:13px;line-height:1.6;">
-              Votre mot de passe d’accès à la plateforme <strong>Royal</strong> a été réinitialisé par un administrateur.
-              Voici votre nouveau mot de passe temporaire :
-            </p>
-            <div style="margin:20px 0;padding:16px;background:#FBF6E8;border:1px solid #E6D6A6;border-radius:12px;text-align:center;">
-              <div style="font-size:11px;text-transform:uppercase;color:#9A7414;font-weight:700;margin-bottom:6px;">Identifiant : ${user.email}</div>
-              <span style="font-family:monospace;font-size:20px;font-weight:900;letter-spacing:1.5px;color:#1D232E;">${generatedPassword}</span>
-            </div>
-            <p style="font-size:12px;color:#64748B;">
-              Par mesure de sécurité, toutes vos sessions précédentes ont été déconnectées.
-              Nous vous recommandons de modifier ce mot de passe dès votre prochaine connexion dans votre profil.
-            </p>
-          </div>
-        `,
+        subject: rendered.subject,
+        htmlBody: rendered.htmlBody,
+        templateId: rendered.templateId,
+        smtpCfg,
       });
     } catch (err: any) {
       this.logger.warn(`Failed sending reset password email to ${user.email}: ${err?.message || err}`);
@@ -948,25 +944,24 @@ export class UsersService {
     const otpCode = String(crypto.randomInt(100000, 999999));
     const tokenHash = crypto.createHash('sha256').update(otpCode).digest('hex');
 
-    await sendSmtpMailWithAttachments(smtpCfg, {
+    const otpRendered = await renderLocalizedEmail(this.prisma, {
+      templateKey: 'auth:verify_email',
+      locale: 'FR',
+      badgeText: 'Code Vérification',
+      variables: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        otpCode,
+        expireTime: '15 minutes',
+      },
+    });
+
+    await sendLoggedSmtpEmail(this.prisma, {
       to: user.email,
-      subject: 'Royal — Code de vérification de votre adresse e-mail',
-      htmlBody: `
-        <div style="font-family:Poppins,Arial,sans-serif;max-width:560px;margin:auto;border:1px solid #E6E1D6;border-radius:16px;padding:28px;background:#FFFFFF;color:#1D232E;">
-          <div style="border-bottom:3px solid #C59B27;padding-bottom:12px;margin-bottom:20px;">
-            <h2 style="margin:0;color:#1D232E;font-size:20px;">Royal — Électro de Maison</h2>
-            <p style="margin:4px 0 0;color:#9A7414;font-size:12px;font-weight:700;">Vérification de votre adresse e-mail</p>
-          </div>
-          <p style="font-size:14px;">Bonjour <strong>${user.firstName} ${user.lastName}</strong>,</p>
-          <p style="font-size:13px;line-height:1.6;">
-            Utilisez le code de vérification à 6 chiffres ci-dessous pour confirmer votre adresse e-mail :
-          </p>
-          <div style="margin:20px 0;padding:16px;background:#FBF6E8;border:1px solid #E6D6A6;border-radius:12px;text-align:center;">
-            <span style="font-family:monospace;font-size:28px;font-weight:900;letter-spacing:6px;color:#1D232E;">${otpCode}</span>
-          </div>
-          <p style="font-size:12px;color:#64748B;">Ce code est valable pendant 15 minutes.</p>
-        </div>
-      `,
+      subject: otpRendered.subject,
+      htmlBody: otpRendered.htmlBody,
+      templateId: otpRendered.templateId,
+      smtpCfg,
     });
 
     await this.prisma.user.update({

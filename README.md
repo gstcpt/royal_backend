@@ -8,7 +8,7 @@
 
 - **Runtime** : Node.js **24.x**, `pnpm@10.15.0`, TypeScript `5.7`
 - **Framework** : NestJS 11 ([`src/main.ts`](file:///e:/ToUse/BSofts/ecommerce/apps/backend/src/main.ts), [`src/app.module.ts`](file:///e:/ToUse/BSofts/ecommerce/apps/backend/src/app.module.ts))
-- **ORM & Base** : Prisma 6 ([`prisma/schema.prisma`](file:///e:/ToUse/BSofts/ecommerce/apps/backend/prisma/schema.prisma) — **71 modèles**, **19 enums**)
+- **ORM & Base** : Prisma 6 ([`prisma/schema.prisma`](file:///e:/ToUse/BSofts/ecommerce/apps/backend/prisma/schema.prisma) — **72 modèles** dont `PermissionView`, **19 enums**)
 - **Sécurité** : Argon2id, JWT Access (15 min) + Refresh Rotation (7 j), `JwtAuthGuard`, `RolesGuard`, `PermissionsGuard` (support `permA|permB`), `AuditInterceptor` (masquage des secrets), Helmet, Throttler (`100` req/60s), body limit `25mb`
 - **Documentation API** : Swagger UI sur `/api/v1/docs` (`http://localhost:4000/api/v1/docs`)
 - **Packages internes vendorisés** : `@royal/shared-types`, `@royal/shared-utils`, `@royal/shared-validators` sous [`apps/backend/packages/`](file:///e:/ToUse/BSofts/ecommerce/apps/backend/packages)

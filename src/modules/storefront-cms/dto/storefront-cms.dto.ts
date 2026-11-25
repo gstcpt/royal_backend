@@ -392,6 +392,50 @@ export class SendDeliveryDocumentsDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() sendDeliverySlip?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() customEmail?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() customNote?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() templateId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() templateKey?: string;
+  @ApiPropertyOptional({ enum: ['FR', 'AR'] }) @IsOptional() @IsIn(['FR', 'AR']) locale?: 'FR' | 'AR';
+  @ApiPropertyOptional() @IsOptional() @IsString() customSubject?: string;
+}
+
+export class PreviewEmailTemplateDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() templateId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() templateKey?: string;
+  @ApiPropertyOptional({ enum: ['FR', 'AR'] }) @IsOptional() @IsIn(['FR', 'AR']) locale?: 'FR' | 'AR';
+  @ApiPropertyOptional() @IsOptional() @IsString() customSubject?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() customBodyHtml?: string;
+  @ApiPropertyOptional() @IsOptional() @IsObject() variables?: Record<string, any>;
+}
+
+export class SendTestEmailTemplateDto extends PreviewEmailTemplateDto {
+  @ApiProperty() @IsEmail() to: string;
+}
+
+export class ReplyContactEmailDto {
+  @ApiProperty() @IsString() @MinLength(1) replyContent: string;
+  @ApiPropertyOptional({ enum: ['FR', 'AR'] }) @IsOptional() @IsIn(['FR', 'AR']) locale?: 'FR' | 'AR';
+  @ApiPropertyOptional() @IsOptional() @IsString() templateId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() templateKey?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() customSubject?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() recipientEmail?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() sendEmail?: boolean;
+}
+
+export class SendNewsletterCampaignDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() templateId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() templateKey?: string;
+  @ApiPropertyOptional({ enum: ['FR', 'AR'] }) @IsOptional() @IsIn(['FR', 'AR']) locale?: 'FR' | 'AR';
+  @ApiProperty() @IsString() @MinLength(1) subject: string;
+  @ApiProperty() @IsString() @MinLength(1) bodyHtml: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() promoCode?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() discountPercent?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() campaignUrl?: string;
+  @ApiPropertyOptional({ enum: ['ACTIVE', 'SELECTED', 'TEST'] })
+  @IsOptional()
+  @IsIn(['ACTIVE', 'SELECTED', 'TEST'])
+  target?: 'ACTIVE' | 'SELECTED' | 'TEST';
+  @ApiPropertyOptional() @IsOptional() @IsArray() subscriberIds?: string[];
+  @ApiPropertyOptional() @IsOptional() @IsEmail() testEmail?: string;
 }
 
 export class AiGenerateDto {

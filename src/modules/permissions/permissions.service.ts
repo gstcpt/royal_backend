@@ -1,16 +1,59 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, OnModuleInit, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { CreatePermissionDto } from './dto/create-permission.dto';
+import {
+  buildFrenchActionTitle,
+  CANONICAL_RBAC_SECTIONS,
+  ensureDeliveryRoleDefaults,
+  scanWorkspaceRbacSurface,
+  syncPermissionsViews,
+} from './rbac-scanner.helper';
 
 @Injectable()
-export class PermissionsService {
+export class PermissionsService implements OnModuleInit {
+  private readonly logger = new Logger(PermissionsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
+  async onModuleInit() {
+    try {
+      const existingCount = await this.prisma.permissionView.count();
+      if (existingCount === 0) {
+        const res = await syncPermissionsViews(this.prisma);
+        this.logger.log(`Seeded permissions_views automatically (${res.upsertedCount} records).`);
+      }
+      const deliveryRes = await ensureDeliveryRoleDefaults(this.prisma, { force: false });
+      const touched = Object.entries(deliveryRes)
+        .filter(([, v]) => !v.skipped)
+        .map(([k, v]) => `${k}(+${v.permissionsAssigned}p/+${v.viewsAssigned}v)`);
+      if (touched.length > 0) {
+        this.logger.log(`Initialized delivery defaults: ${touched.join(', ')}`);
+      }
+    } catch (err: any) {
+      this.logger.warn(`RBAC startup sync skipped: ${err?.message || err}`);
+    }
+  }
+
   /**
-   * Get all permissions grouped by module
+   * Get all permissions grouped by module (with French titles & linked permissions_views)
    */
   async findAll() {
     const permissions = await this.prisma.permission.findMany({
+      include: {
+        permissionViews: {
+          orderBy: [{ sectionOrder: 'asc' }, { viewPath: 'asc' }],
+          select: {
+            id: true,
+            viewPath: true,
+            viewLabelFr: true,
+            sectionKey: true,
+            sectionOrder: true,
+            sectionLabelFr: true,
+            actionTitleFr: true,
+            backendRoute: true,
+          },
+        },
+      },
       orderBy: [{ module: 'asc' }, { action: 'asc' }],
     });
 
@@ -26,6 +69,10 @@ export class PermissionsService {
         action: perm.action,
         scope: perm.scope,
         description: perm.description,
+        actionTitleFr:
+          perm.permissionViews?.[0]?.actionTitleFr ||
+          buildFrenchActionTitle(perm.module, perm.action),
+        views: perm.permissionViews || [],
       });
     }
 
@@ -34,6 +81,46 @@ export class PermissionsService {
       modulesCount: Object.keys(grouped).length,
       modules: grouped,
     };
+  }
+
+  async listPermissionViews() {
+    const items = await this.prisma.permissionView.findMany({
+      orderBy: [{ sectionOrder: 'asc' }, { viewPath: 'asc' }, { action: 'asc' }],
+    });
+    const sections = CANONICAL_RBAC_SECTIONS.map((sec) => ({
+      order: sec.order,
+      key: sec.key,
+      labelFr: sec.labelFr,
+      descriptionFr: sec.descriptionFr,
+      viewsCount: sec.routes.length,
+    }));
+    return {
+      total: items.length,
+      sectionsCount: sections.length,
+      sections,
+      items,
+    };
+  }
+
+  async scanAndSyncViews() {
+    const syncResult = await syncPermissionsViews(this.prisma);
+    const deliveryResult = await ensureDeliveryRoleDefaults(this.prisma, { force: false });
+    const viewsData = await this.listPermissionViews();
+    return {
+      scan: syncResult,
+      deliveryDefaults: deliveryResult,
+      totalStored: viewsData.total,
+      sections: viewsData.sections,
+      items: viewsData.items,
+    };
+  }
+
+  async inspectScannerSurface() {
+    return scanWorkspaceRbacSurface();
+  }
+
+  async assignDeliveryDefaults(force = false) {
+    return ensureDeliveryRoleDefaults(this.prisma, { force });
   }
 
   /**

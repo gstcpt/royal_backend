@@ -128,6 +128,7 @@ model Permission {
 
   rolePermissions RolePermission[]
   userPermissions UserPermission[]
+  permissionViews PermissionView[]
 
   @@unique([module, resource, action, scope])
   @@map("permissions")
@@ -174,6 +175,33 @@ model UserPermission {
 
   @@unique([userId, permissionId])
   @@map("user_permissions")
+}
+
+model PermissionView {
+  id             String   @id @default(cuid())
+  permissionId   String?
+  permissionCode String
+  module         String
+  action         String
+  actionTitleFr  String
+  sectionKey     String
+  sectionOrder   Int      @default(13)
+  sectionLabelFr String
+  viewPath       String
+  viewLabelFr    String
+  backendRoute   String?
+  sourceType     String   @default("SCANNER")
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  permission Permission? @relation(fields: [permissionId], references: [id], onDelete: SetNull)
+
+  @@unique([permissionCode, viewPath])
+  @@index([sectionOrder, sectionKey])
+  @@index([viewPath])
+  @@index([module])
+  @@map("permissions_views")
 }
 
 // ════════════════════════════════════════════════════════
