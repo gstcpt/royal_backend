@@ -21,11 +21,11 @@ async function main() {
       role: 'SUPER_ADMIN',
     },
     {
-      email: 'admin@royal.com.tn',
+      email: 'websitemanager@royal.com.tn',
       pass: 'AdminStore2026!',
-      first: 'Sami',
-      last: 'Ben Salem',
-      role: 'ADMIN',
+      first: 'Website',
+      last: 'Manager',
+      role: 'WEBSITE_MANAGER',
     },
     {
       email: 'client@royal.com.tn',
@@ -49,11 +49,25 @@ async function main() {
       role: 'STOCK_MANAGER',
     },
     {
-      email: 'delivery@royal.com.tn',
-      pass: 'Delivery2026!',
-      first: 'Mohamed',
-      last: 'Zitouni',
-      role: 'DELIVERY_MANAGER',
+      email: 'vendeur@royal.com.tn',
+      pass: 'Vendeur2026!',
+      first: 'Vendeur',
+      last: 'Showroom',
+      role: 'SALESPERSON',
+    },
+    {
+      email: 'financier@royal.com.tn',
+      pass: 'Financier2026!',
+      first: 'Financier',
+      last: 'Royal',
+      role: 'ACCOUNTANT',
+    },
+    {
+      email: 'commercial@royal.com.tn',
+      pass: 'Commercial2026!',
+      first: 'Commercial',
+      last: 'Royal',
+      role: 'COMMERCIAL',
     },
   ];
 

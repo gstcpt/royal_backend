@@ -22,7 +22,7 @@ export class QueryUsersDto {
   @IsOptional()
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Filtrer par nom de rôle (ex: ADMIN, CLIENT)' })
+  @ApiPropertyOptional({ description: 'Filtrer par nom de rôle (ex: WEBSITE_MANAGER, CLIENT)' })
   @IsString()
   @IsOptional()
   role?: string;

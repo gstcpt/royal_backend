@@ -12,12 +12,14 @@ async function main() {
   const roles = [
     { name: 'ROOT', displayName: 'Super Root System', isSystem: true, description: 'Master administrator with unbreakable god privileges' },
     { name: 'SUPER_ADMIN', displayName: 'Super Administrateur', isSystem: true, description: 'Directeur général de la plateforme' },
-    { name: 'ADMIN', displayName: 'Administrateur', isSystem: false, description: 'Gestionnaire délégué de boutique' },
+    { name: 'WEBSITE_MANAGER', displayName: 'Website Manager', isSystem: true, description: 'Gestionnaire délégué de boutique et opérations' },
+    { name: 'COMMERCIAL', displayName: 'Commercial', isSystem: true, description: 'Prospection, catalogue et suivi ventes B2B' },
     { name: 'MARKETING', displayName: 'Marketing', isSystem: false, description: 'Catalogue (sans suppression), Communauté (Notifications & Contact sans Support) et Espace Client' },
+    { name: 'SALESPERSON', displayName: 'Vendeurs', isSystem: true, description: 'Ventes showrooms et caisse POS' },
     { name: 'CLIENT', displayName: 'Client', isSystem: true, description: 'Client final e-commerce' },
-    { name: 'STOCK_MANAGER', displayName: 'Gestionnaire de Stock', isSystem: false, description: 'Responsable inventaire et entrepôts' },
-    { name: 'CASHIER', displayName: 'Caissier POS', isSystem: false, description: 'Opérateur caisse et point de vente' },
-    { name: 'ACCOUNTANT', displayName: 'Comptable', isSystem: false, description: 'Responsable trésorerie et finances' },
+    { name: 'STOCK_MANAGER', displayName: 'Magasiniers', isSystem: true, description: 'Responsable inventaire et entrepôts' },
+    { name: 'CASHIER', displayName: 'Caissiers', isSystem: true, description: 'Opérateur caisse et point de vente' },
+    { name: 'ACCOUNTANT', displayName: 'Financiers', isSystem: true, description: 'Responsable trésorerie et finances' },
   ];
 
   for (const role of roles) {
@@ -62,15 +64,15 @@ async function main() {
   }
   console.log(`✅ ${countPerms} Permissions seeded.`);
 
-  // 3. Assign all permissions to ROOT and SUPER_ADMIN, and operational permissions to ADMIN (Website Manager)
+  // 3. Assign all permissions to ROOT and SUPER_ADMIN, and operational permissions to WEBSITE_MANAGER
   const rootRole = await prisma.role.findUniqueOrThrow({ where: { name: 'ROOT' } });
   const superAdminRole = await prisma.role.findUniqueOrThrow({ where: { name: 'SUPER_ADMIN' } });
-  const adminRole = await prisma.role.findUniqueOrThrow({ where: { name: 'ADMIN' } });
+  const websiteManagerRole = await prisma.role.findUniqueOrThrow({ where: { name: 'WEBSITE_MANAGER' } });
   const allPermissions = await prisma.permission.findMany();
 
-  const adminModules = new Set([
+  const websiteManagerModules = new Set([
     'users', 'products', 'categories', 'characteristics', 'variants', 'brands', 'suppliers',
-    'warehouses', 'inventory', 'pos', 'orders', 'customers', 'deliveries',
+    'warehouses', 'inventory', 'pos', 'orders', 'customers', 'deliveries', 'delivery_companies',
     'payments', 'treasury', 'accounting', 'expenses', 'reports', 'reviews', 'coupons',
   ]);
 
@@ -87,11 +89,11 @@ async function main() {
       create: { roleId: superAdminRole.id, permissionId: perm.id },
     });
 
-    if (adminModules.has(perm.module)) {
+    if (websiteManagerModules.has(perm.module)) {
       await prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: adminRole.id, permissionId: perm.id } },
+        where: { roleId_permissionId: { roleId: websiteManagerRole.id, permissionId: perm.id } },
         update: {},
-        create: { roleId: adminRole.id, permissionId: perm.id },
+        create: { roleId: websiteManagerRole.id, permissionId: perm.id },
       });
     }
   }
@@ -140,11 +142,13 @@ async function main() {
 
   const staffAndClientAccounts = [
     { email: 'superadmin@royal.com.tn', password: process.env.SUPERADMIN_PASSWORD || 'SuperAdmin2026!', firstName: 'Directeur', lastName: 'Général', role: 'SUPER_ADMIN' },
-    { email: 'admin@royal.com.tn', password: process.env.ADMIN_PASSWORD || 'AdminStore2026!', firstName: 'Sami', lastName: 'Ben Salem', role: 'ADMIN' },
-    { email: 'websitemanager@royal.com.tn', password: process.env.ADMIN_PASSWORD || 'AdminStore2026!', firstName: 'Website', lastName: 'Manager', role: 'ADMIN' },
+    { email: 'websitemanager@royal.com.tn', password: process.env.ADMIN_PASSWORD || 'AdminStore2026!', firstName: 'Website', lastName: 'Manager', role: 'WEBSITE_MANAGER' },
+    { email: 'commercial@royal.com.tn', password: process.env.COMMERCIAL_PASSWORD || 'Commercial2026!', firstName: 'Commercial', lastName: 'Royal', role: 'COMMERCIAL' },
     { email: 'marketing@royal.com.tn', password: process.env.MARKETING_PASSWORD || process.env.ADMIN_PASSWORD || 'AdminStore2026!', firstName: 'Marketing', lastName: 'Royal', role: 'MARKETING' },
+    { email: 'vendeur@royal.com.tn', password: process.env.SALESPERSON_PASSWORD || 'Vendeur2026!', firstName: 'Vendeur', lastName: 'Showroom', role: 'SALESPERSON' },
     { email: 'cashier@royal.com.tn', password: process.env.CASHIER_PASSWORD || 'Cashier2026!', firstName: 'Karim', lastName: 'Mejri', role: 'CASHIER' },
     { email: 'stock@royal.com.tn', password: process.env.STOCK_PASSWORD || 'Stock2026!', firstName: 'Youssef', lastName: 'Gharbi', role: 'STOCK_MANAGER' },
+    { email: 'financier@royal.com.tn', password: process.env.ACCOUNTANT_PASSWORD || 'Financier2026!', firstName: 'Financier', lastName: 'Royal', role: 'ACCOUNTANT' },
     { email: 'client@royal.com.tn', password: process.env.CLIENT_PASSWORD || 'ClientPassword2026!', firstName: 'Amira', lastName: 'Trabelsi', role: 'CLIENT' },
   ];
 

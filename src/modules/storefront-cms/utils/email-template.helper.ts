@@ -1,7 +1,114 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { PrismaService } from '../../../database/prisma.service';
 import { sendSmtpMailWithAttachments, SmtpAttachment } from './pdf-smtp.helper';
 
 export type EmailLocale = 'FR' | 'AR';
+export type EmailRenderMode = 'email' | 'preview';
+
+export const ROYAL_EMAIL_LOGO_CID = 'royal-brand-logo@royal.com.tn';
+
+let cachedFallbackLogo: { buffer: Buffer; mimeType: string; filename: string } | null = null;
+
+function guessImageMime(filenameOrExt: string): string {
+  const lower = String(filenameOrExt || '').toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  return 'image/jpeg';
+}
+
+function readLocalFileCandidate(candidates: string[]): Buffer | null {
+  for (const p of candidates) {
+    try {
+      if (p && fs.existsSync(p) && fs.statSync(p).isFile()) {
+        return fs.readFileSync(p);
+      }
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
+export function resolveBrandLogoAsset(logoUrl?: string): {
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+} | null {
+  const raw = String(logoUrl || '').trim();
+
+  // 1. Direct base64 raster data URI
+  const dataMatch = raw.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,(.+)$/i);
+  if (dataMatch) {
+    try {
+      const mimeType = dataMatch[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : dataMatch[1].toLowerCase();
+      const ext = mimeType.split('/')[1].replace('jpeg', 'jpg');
+      return {
+        buffer: Buffer.from(dataMatch[2], 'base64'),
+        mimeType,
+        filename: `royal-logo.${ext}`,
+      };
+    } catch {
+      // fall through
+    }
+  }
+
+  // 2. Uploaded branding asset via /api/v1/storefront-cms/media/<filename> or /uploads/<filename>
+  const mediaMatch = raw.match(/(?:\/storefront-cms\/media|\/uploads)\/([^/?#]+)/i);
+  if (mediaMatch && !raw.toLowerCase().endsWith('.svg')) {
+    const cleanName = path.basename(decodeURIComponent(mediaMatch[1]));
+    const uploadBase = process.env.STORAGE_LOCAL_PATH || './uploads';
+    const buf = readLocalFileCandidate([
+      path.resolve(uploadBase, cleanName),
+      path.resolve(process.cwd(), 'uploads', cleanName),
+      path.resolve(process.cwd(), 'apps', 'backend', 'uploads', cleanName),
+      path.resolve(process.cwd(), 'apps', 'frontend', 'public', 'uploads', cleanName),
+    ]);
+    if (buf) {
+      return { buffer: buf, mimeType: guessImageMime(cleanName), filename: cleanName };
+    }
+  }
+
+  // 3. Explicit /images/<name> raster file in frontend public/images (non-SVG for Gmail/Outlook compatibility)
+  if (raw.includes('/images/') && !raw.toLowerCase().endsWith('.svg')) {
+    const imgRel = raw.replace(/^https?:\/\/[^/]+/i, '').split(/[?#]/)[0].replace(/^\/+/, '');
+    const buf = readLocalFileCandidate([
+      path.resolve(process.cwd(), 'apps', 'frontend', 'public', imgRel),
+      path.resolve(process.cwd(), '..', 'frontend', 'public', imgRel),
+      path.resolve('/app', 'apps', 'frontend', 'public', imgRel),
+    ]);
+    if (buf) {
+      const fname = path.basename(imgRel);
+      return { buffer: buf, mimeType: guessImageMime(fname), filename: fname };
+    }
+  }
+
+  // 4. Built-in guaranteed Royal raster logo bundled in apps/backend/src/assets (and dist/assets)
+  if (!cachedFallbackLogo) {
+    const fallbackBuf = readLocalFileCandidate([
+      path.resolve(__dirname, '..', '..', '..', 'assets', 'royal-logo.jpg'),
+      path.resolve(process.cwd(), 'dist', 'assets', 'royal-logo.jpg'),
+      path.resolve(process.cwd(), 'src', 'assets', 'royal-logo.jpg'),
+      path.resolve(process.cwd(), 'apps', 'backend', 'src', 'assets', 'royal-logo.jpg'),
+      path.resolve(process.cwd(), 'apps', 'frontend', 'public', 'images', 'royal-logo.jpg'),
+      path.resolve(process.cwd(), '..', 'frontend', 'public', 'images', 'royal-logo.jpg'),
+    ]);
+    if (fallbackBuf) {
+      cachedFallbackLogo = { buffer: fallbackBuf, mimeType: 'image/jpeg', filename: 'royal-logo.jpg' };
+    }
+  }
+  return cachedFallbackLogo;
+}
+
+function isNonPublicOrDefaultLogoUrl(url: string): boolean {
+  const clean = String(url || '').trim();
+  if (!clean) return true;
+  if (!clean.startsWith('http://') && !clean.startsWith('https://')) return true;
+  return /:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|backend|frontend|(?:www\.)?royal\.com\.tn)(?::\d+)?(?:\/|$)/i.test(
+    clean,
+  );
+}
 
 export interface LuxuryEmailTemplateSeed {
   key: string;
@@ -388,6 +495,7 @@ export function wrapWithLuxuryEmailShell(opts: {
   email?: string;
   address?: string;
   websiteUrl?: string;
+  mode?: EmailRenderMode;
 }): string {
   const trimmed = String(opts.innerHtml || '').trim();
   if (/data-royal-email-shell|<!DOCTYPE\s+html|<html[\s>]/i.test(trimmed)) {
@@ -402,10 +510,26 @@ export function wrapWithLuxuryEmailShell(opts: {
     : `'Poppins','Segoe UI','Helvetica Neue',Arial,sans-serif`;
 
   const resolvedWebsite = (opts.websiteUrl || DEFAULT_WEBSITE_URL).replace(/\/+$/, '');
-  const resolvedLogo =
-    opts.logoUrl && opts.logoUrl.startsWith('http')
-      ? opts.logoUrl
-      : `${resolvedWebsite}${opts.logoUrl?.startsWith('/') ? opts.logoUrl : '/images/royal-logo.jpg'}`;
+  const rawLogo = String(opts.logoUrl || '/images/royal-logo.jpg').trim();
+  const localAsset = resolveBrandLogoAsset(rawLogo);
+  const mode: EmailRenderMode = opts.mode || 'email';
+
+  let resolvedLogo: string;
+  if (mode === 'preview') {
+    if (localAsset && isNonPublicOrDefaultLogoUrl(rawLogo)) {
+      resolvedLogo = `data:${localAsset.mimeType};base64,${localAsset.buffer.toString('base64')}`;
+    } else if (rawLogo.startsWith('http') || rawLogo.startsWith('data:')) {
+      resolvedLogo = rawLogo;
+    } else {
+      resolvedLogo = rawLogo.startsWith('/') ? rawLogo : '/images/royal-logo.jpg';
+    }
+  } else if (localAsset && isNonPublicOrDefaultLogoUrl(rawLogo)) {
+    resolvedLogo = `cid:${ROYAL_EMAIL_LOGO_CID}`;
+  } else {
+    resolvedLogo = rawLogo.startsWith('http')
+      ? rawLogo
+      : `${resolvedWebsite}${rawLogo.startsWith('/') ? rawLogo : '/images/royal-logo.jpg'}`;
+  }
   const badge = opts.badgeText || (isAr ? 'رسالة رسمية • رويال' : 'Maison Royal Officiel');
   const subtitle = isAr ? 'الأجهزة الكهرومنزلية الفاخرة' : 'Électroménager & Maison Haut de Gamme';
   const footerHint = isAr
@@ -540,6 +664,7 @@ export async function renderLocalizedEmail(
     badgeText?: string;
     variables?: Record<string, any>;
     wrapInShell?: boolean;
+    mode?: EmailRenderMode;
   },
 ) {
   await ensureLuxuryEmailTemplateDefaults(prisma);
@@ -596,6 +721,7 @@ export async function renderLocalizedEmail(
           email: identity.email,
           address: identity.address,
           websiteUrl: identity.websiteUrl,
+          mode: params.mode || 'email',
         });
 
   return {
@@ -644,11 +770,38 @@ export async function sendLoggedSmtpEmail(
   }
 
   try {
+    let finalHtmlBody = opts.htmlBody;
+    const inlineAttachments: SmtpAttachment[] = [];
+    const identityRow = await prisma.settings
+      .findUnique({ where: { key: 'cms.identity' } })
+      .catch(() => null);
+    const configuredLogoUrl = safeJsonParse(identityRow?.value).logoUrl || '/images/royal-logo.jpg';
+
+    // Rewrite any local/relative logo <img src> in custom templates cleanly to CID and attach inline
+    finalHtmlBody = finalHtmlBody.replace(
+      /(src=["'])(?:https?:\/\/(?:localhost|127\.0\.0\.1|(?:www\.)?royal\.com\.tn)(?::\d+)?)?\/images\/royal-logo\.(?:jpg|jpeg|png|svg)(["'])/gi,
+      `$1cid:${ROYAL_EMAIL_LOGO_CID}$2`,
+    );
+
+    if (finalHtmlBody.includes(`cid:${ROYAL_EMAIL_LOGO_CID}`)) {
+      const logoAsset = resolveBrandLogoAsset(configuredLogoUrl);
+      if (logoAsset) {
+        inlineAttachments.push({
+          filename: logoAsset.filename,
+          contentType: logoAsset.mimeType,
+          content: logoAsset.buffer,
+          cid: ROYAL_EMAIL_LOGO_CID,
+          disposition: 'inline',
+        });
+      }
+    }
+
     const res = await sendSmtpMailWithAttachments(smtp as any, {
       to: opts.to,
       subject: opts.subject,
-      htmlBody: opts.htmlBody,
+      htmlBody: finalHtmlBody,
       attachments: opts.attachments,
+      inlineAttachments,
     });
     await prisma.emailLog.create({
       data: {

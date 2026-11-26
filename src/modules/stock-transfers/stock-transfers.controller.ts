@@ -53,7 +53,7 @@ export class StockTransfersController {
   }
 
   @Post(':id/accept')
-  @Roles(SystemRole.ROOT, SystemRole.SUPER_ADMIN, SystemRole.WEBSITE_MANAGER, SystemRole.ADMIN)
+  @Roles(SystemRole.ROOT, SystemRole.SUPER_ADMIN, SystemRole.WEBSITE_MANAGER)
   @Permissions('transfers:approve', 'inventory:manage')
   @ApiOperation({ summary: 'Accepter une demande de transfert (Exécution immédiate OUT+IN ou Suivi par étapes)' })
   @ApiResponse({ status: 200, description: 'Demande acceptée et bon de transfert TRF généré' })
@@ -67,7 +67,7 @@ export class StockTransfersController {
   }
 
   @Post(':id/approve')
-  @Roles(SystemRole.ROOT, SystemRole.SUPER_ADMIN, SystemRole.WEBSITE_MANAGER, SystemRole.ADMIN)
+  @Roles(SystemRole.ROOT, SystemRole.SUPER_ADMIN, SystemRole.WEBSITE_MANAGER)
   @Permissions('transfers:approve', 'inventory:manage')
   @ApiOperation({ summary: 'Approuver une demande de transfert (mode par étapes)' })
   @ApiResponse({ status: 200, description: 'Transfert approuvé' })

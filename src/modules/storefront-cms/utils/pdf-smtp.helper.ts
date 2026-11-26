@@ -189,6 +189,8 @@ export interface SmtpAttachment {
   filename: string;
   contentType: string;
   content: Buffer;
+  cid?: string;
+  disposition?: 'attachment' | 'inline';
 }
 
 function encodeRfc2047(text: string): string {
@@ -200,8 +202,32 @@ function chunkBase64(buf: Buffer): string {
   return b64.replace(/(.{76})/g, '$1\r\n');
 }
 
+function buildHtmlPartLines(htmlBody: string): string[] {
+  return [
+    'Content-Type: text/html; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    chunkBase64(Buffer.from(htmlBody, 'utf8')),
+    '',
+  ];
+}
+
+function buildInlinePartLines(att: SmtpAttachment): string[] {
+  const cleanCid = String(att.cid || att.filename).replace(/^<|>$/g, '');
+  return [
+    `Content-Type: ${att.contentType}; name="${att.filename}"`,
+    'Content-Transfer-Encoding: base64',
+    `Content-ID: <${cleanCid}>`,
+    `Content-Disposition: inline; filename="${att.filename}"`,
+    '',
+    chunkBase64(att.content),
+    '',
+  ];
+}
+
 /**
- * Pure-Node zero-dependency SMTP client supporting implicit TLS (465), STARTTLS (587), and AUTH LOGIN.
+ * Pure-Node zero-dependency SMTP client supporting implicit TLS (465), STARTTLS (587), AUTH LOGIN,
+ * RFC 2387 multipart/related inline CID images, and multipart/mixed document attachments.
  */
 export async function sendSmtpMailWithAttachments(
   cfg: SmtpConfigPayload,
@@ -210,6 +236,7 @@ export async function sendSmtpMailWithAttachments(
     subject: string;
     htmlBody: string;
     attachments?: SmtpAttachment[];
+    inlineAttachments?: SmtpAttachment[];
   },
 ): Promise<{ accepted: boolean; message: string }> {
   const host = String(cfg.host || '').trim();
@@ -223,32 +250,65 @@ export async function sendSmtpMailWithAttachments(
     throw new Error('Paramètres SMTP incomplets (hôte, utilisateur ou mot de passe manquant dans /dashboard/root/smtp).');
   }
 
-  const boundary = `royal_mix_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const allAtts = mail.attachments || [];
+  const explicitInlines = mail.inlineAttachments || [];
+  const inlineList = [
+    ...explicitInlines,
+    ...allAtts.filter((a) => Boolean(a.cid) || a.disposition === 'inline'),
+  ];
+  const fileAtts = allAtts.filter((a) => !a.cid && a.disposition !== 'inline');
+
+  const uniqSuffix = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const mixedBoundary = `royal_mix_${uniqSuffix}`;
+  const relBoundary = `royal_rel_${uniqSuffix}`;
+
   const lines: string[] = [
     `From: ${encodeRfc2047(fromName)} <${fromEmail}>`,
     `To: <${mail.to}>`,
     `Subject: ${encodeRfc2047(mail.subject)}`,
     'MIME-Version: 1.0',
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/html; charset="UTF-8"',
-    'Content-Transfer-Encoding: base64',
-    '',
-    chunkBase64(Buffer.from(mail.htmlBody, 'utf8')),
-    '',
   ];
 
-  for (const att of mail.attachments || []) {
-    lines.push(`--${boundary}`);
-    lines.push(`Content-Type: ${att.contentType}; name="${att.filename}"`);
-    lines.push('Content-Transfer-Encoding: base64');
-    lines.push(`Content-Disposition: attachment; filename="${att.filename}"`);
-    lines.push('');
-    lines.push(chunkBase64(att.content));
-    lines.push('');
+  if (fileAtts.length > 0 && inlineList.length > 0) {
+    lines.push(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"`, '');
+    lines.push(`--${mixedBoundary}`);
+    lines.push(`Content-Type: multipart/related; boundary="${relBoundary}"; type="text/html"`, '');
+    lines.push(`--${relBoundary}`);
+    lines.push(...buildHtmlPartLines(mail.htmlBody));
+    for (const att of inlineList) {
+      lines.push(`--${relBoundary}`);
+      lines.push(...buildInlinePartLines(att));
+    }
+    lines.push(`--${relBoundary}--`, '');
+  } else if (inlineList.length > 0) {
+    lines.push(`Content-Type: multipart/related; boundary="${relBoundary}"; type="text/html"`, '');
+    lines.push(`--${relBoundary}`);
+    lines.push(...buildHtmlPartLines(mail.htmlBody));
+    for (const att of inlineList) {
+      lines.push(`--${relBoundary}`);
+      lines.push(...buildInlinePartLines(att));
+    }
+    lines.push(`--${relBoundary}--`, '');
+  } else {
+    lines.push(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"`, '');
+    lines.push(`--${mixedBoundary}`);
+    lines.push(...buildHtmlPartLines(mail.htmlBody));
   }
-  lines.push(`--${boundary}--`, '');
+
+  if (fileAtts.length > 0) {
+    for (const att of fileAtts) {
+      lines.push(`--${mixedBoundary}`);
+      lines.push(`Content-Type: ${att.contentType}; name="${att.filename}"`);
+      lines.push('Content-Transfer-Encoding: base64');
+      lines.push(`Content-Disposition: attachment; filename="${att.filename}"`);
+      lines.push('');
+      lines.push(chunkBase64(att.content));
+      lines.push('');
+    }
+    lines.push(`--${mixedBoundary}--`, '');
+  } else if (inlineList.length === 0) {
+    lines.push(`--${mixedBoundary}--`, '');
+  }
 
   // Escape any leading dots per RFC 5321 Section 4.5.2
   const rawMime = lines.join('\r\n').replace(/^\./gm, '..') + '\r\n.\r\n';

@@ -172,8 +172,139 @@ async function main() {
     }
   }
 
+  // Consolidation idempotente ADMIN -> WEBSITE_MANAGER (sans perte utilisateurs/permissions)
+  const wmRole = await prisma.role.upsert({
+    where: { name: 'WEBSITE_MANAGER' },
+    update: { displayName: 'Website Manager', isSystem: true },
+    create: {
+      name: 'WEBSITE_MANAGER',
+      displayName: 'Website Manager',
+      description: 'Gestionnaire délégué de boutique et opérations',
+      isSystem: true,
+    },
+  });
+
+  const legacyAdminRole = await prisma.role.findUnique({
+    where: { name: 'ADMIN' },
+    include: { rolePermissions: true, userRoles: true },
+  });
+  if (legacyAdminRole) {
+    if (legacyAdminRole.rolePermissions.length > 0) {
+      await prisma.rolePermission.createMany({
+        data: legacyAdminRole.rolePermissions.map((rp) => ({
+          roleId: wmRole.id,
+          permissionId: rp.permissionId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+    for (const ur of legacyAdminRole.userRoles) {
+      const existsWm = await prisma.userRole.findFirst({
+        where: {
+          userId: ur.userId,
+          roleId: wmRole.id,
+          warehouseId: ur.warehouseId,
+          posId: ur.posId,
+        },
+      });
+      if (!existsWm) {
+        await prisma.userRole.update({
+          where: { id: ur.id },
+          data: { roleId: wmRole.id },
+        });
+      } else {
+        await prisma.userRole.delete({ where: { id: ur.id } });
+      }
+    }
+    await prisma.rolePermission.deleteMany({ where: { roleId: legacyAdminRole.id } });
+    await prisma.role.delete({ where: { id: legacyAdminRole.id } });
+  }
+
+  // Nettoyer /dashboard/users/admins et ADMIN de sys.visibility, sys.roleViews & permissions_views
+  const visCleanup = await prisma.settings.findUnique({ where: { key: 'sys.visibility' } });
+  if (visCleanup?.value) {
+    try {
+      const visArr = JSON.parse(visCleanup.value);
+      if (Array.isArray(visArr)) {
+        const filteredVis = visArr.filter((e: any) => e?.key !== '/dashboard/users/admins');
+        if (filteredVis.length !== visArr.length) {
+          await prisma.settings.update({
+            where: { key: 'sys.visibility' },
+            data: { value: JSON.stringify(filteredVis), group: 'system', updatedBy: 'SYNC_SCRIPT' },
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const rvCleanup = await prisma.settings.findUnique({ where: { key: 'sys.roleViews' } });
+  if (rvCleanup?.value) {
+    try {
+      const rvObj = JSON.parse(rvCleanup.value);
+      if (rvObj && typeof rvObj === 'object' && !Array.isArray(rvObj)) {
+        let changed = false;
+        if ('ADMIN' in rvObj) {
+          if (!Array.isArray(rvObj.WEBSITE_MANAGER) && Array.isArray(rvObj.ADMIN)) {
+            rvObj.WEBSITE_MANAGER = rvObj.ADMIN;
+          }
+          delete rvObj.ADMIN;
+          changed = true;
+        }
+        for (const [k, arr] of Object.entries(rvObj)) {
+          if (Array.isArray(arr)) {
+            const nextArr = arr.filter((p) => p !== '/dashboard/users/admins');
+            if (nextArr.length !== arr.length) {
+              rvObj[k] = nextArr;
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          await prisma.settings.update({
+            where: { key: 'sys.roleViews' },
+            data: { value: JSON.stringify(rvObj), group: 'system', updatedBy: 'SYNC_SCRIPT' },
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  await prisma.permissionView.deleteMany({ where: { viewPath: '/dashboard/users/admins' } }).catch(() => null);
+
+  // Alignement initial non-destructif sys.generalSettings <-> shipping.* si nécessaire
+  const [genRow, shipThreshRow, shipFeeRow] = await Promise.all([
+    prisma.settings.findUnique({ where: { key: 'sys.generalSettings' } }),
+    prisma.settings.findUnique({ where: { key: 'shipping.free_threshold' } }),
+    prisma.settings.findUnique({ where: { key: 'shipping.standard_fee' } }),
+  ]);
+  if (genRow?.value && (shipThreshRow?.value || shipFeeRow?.value)) {
+    try {
+      const genObj = JSON.parse(genRow.value);
+      const nextGen = {
+        ...genObj,
+        ...(shipThreshRow?.value ? { freeShippingThreshold: Number(shipThreshRow.value) } : {}),
+        ...(shipFeeRow?.value ? { defaultShippingFee: Number(shipFeeRow.value) } : {}),
+      };
+      if (
+        nextGen.freeShippingThreshold !== genObj.freeShippingThreshold ||
+        nextGen.defaultShippingFee !== genObj.defaultShippingFee
+      ) {
+        await prisma.settings.update({
+          where: { key: 'sys.generalSettings' },
+          data: { value: JSON.stringify(nextGen), group: 'system', updatedBy: 'SYNC_SCRIPT' },
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   console.log(
-    `[OK] Role MARKETING (${role.id}) synchronisé avec ${targetPermissionIds.length} permissions, ${MARKETING_DEFAULT_VIEWS.length} vues autorisées, bascule compte marketing@royal.com.tn=${Boolean(marketingUser)}, et visibilité PRIVATE verrouillée.`,
+    `[OK] Role MARKETING (${role.id}) synchronisé avec ${targetPermissionIds.length} permissions, ${MARKETING_DEFAULT_VIEWS.length} vues autorisées, ADMIN consolidé vers WEBSITE_MANAGER (${wmRole.id}), et visibilité PRIVATE verrouillée.`,
   );
 }
 

@@ -644,37 +644,21 @@ export class StorefrontCmsService {
   }
 
   async updateShippingConfig(dto: UpdateShippingConfigDto, updatedBy?: string) {
-    await this.prisma.settings.upsert({
-      where: { key: 'shipping.free_threshold' },
-      update: {
-        value: String(dto.freeShippingThreshold),
-        updatedBy: updatedBy || 'ADMIN',
-      },
-      create: {
-        key: 'shipping.free_threshold',
-        value: String(dto.freeShippingThreshold),
-        group: 'shipping',
-        isSecret: false,
-        updatedBy: updatedBy || 'ADMIN',
-      },
-    });
+    await this.upsertSetting('shipping.free_threshold', String(dto.freeShippingThreshold), 'shipping', updatedBy);
 
     if (dto.standardShippingFee !== undefined) {
-      await this.prisma.settings.upsert({
-        where: { key: 'shipping.standard_fee' },
-        update: {
-          value: String(dto.standardShippingFee),
-          updatedBy: updatedBy || 'ADMIN',
-        },
-        create: {
-          key: 'shipping.standard_fee',
-          value: String(dto.standardShippingFee),
-          group: 'shipping',
-          isSecret: false,
-          updatedBy: updatedBy || 'ADMIN',
-        },
-      });
+      await this.upsertSetting('shipping.standard_fee', String(dto.standardShippingFee), 'shipping', updatedBy);
     }
+
+    // Shared settings sync -> sys.generalSettings
+    const genRow = await this.prisma.settings.findUnique({ where: { key: 'sys.generalSettings' } });
+    const genObj = this.parseJsonSetting<Record<string, any>>(genRow?.value, this.getExtendedSysConfigDefault('generalSettings'));
+    const nextGen = {
+      ...genObj,
+      freeShippingThreshold: Number(dto.freeShippingThreshold),
+      ...(dto.standardShippingFee !== undefined ? { defaultShippingFee: Number(dto.standardShippingFee) } : {}),
+    };
+    await this.upsertSetting('sys.generalSettings', JSON.stringify(nextGen), 'system', updatedBy);
 
     return this.getPublicConfig();
   }
@@ -742,14 +726,14 @@ export class StorefrontCmsService {
         title: dto.title,
         subtitle: dto.subtitle,
         content: dto.content,
-        updatedBy: updatedBy || 'ADMIN',
+        updatedBy: updatedBy || 'SYSTEM',
       },
       create: {
         slug,
         title: dto.title || slug,
         subtitle: dto.subtitle,
         content: dto.content,
-        updatedBy: updatedBy || 'ADMIN',
+        updatedBy: updatedBy || 'SYSTEM',
       },
     });
   }
@@ -1397,7 +1381,7 @@ export class StorefrontCmsService {
       },
     });
 
-    // Notify ROOT, SUPER_ADMIN, and ADMIN / WEBSITE_MANAGER users in PostgreSQL
+    // Notify ROOT, SUPER_ADMIN, and WEBSITE_MANAGER users in PostgreSQL
     try {
       const adminUsers = await this.prisma.user.findMany({
         where: {
@@ -1405,7 +1389,7 @@ export class StorefrontCmsService {
           isActive: true,
           userRoles: {
             some: {
-              role: { name: { in: ['ROOT', 'SUPER_ADMIN', 'ADMIN', 'WEBSITE_MANAGER'] } },
+              role: { name: { in: ['ROOT', 'SUPER_ADMIN', 'WEBSITE_MANAGER'] } },
             },
           },
         },
@@ -2138,7 +2122,7 @@ export class StorefrontCmsService {
       data: {
         status: dto.status,
         moderatedAt: new Date(),
-        moderatedBy: moderator || 'ADMIN',
+        moderatedBy: moderator || 'SYSTEM',
       },
     });
   }
@@ -2166,7 +2150,7 @@ export class StorefrontCmsService {
         data: {
           status: status as any,
           moderatedAt: new Date(),
-          moderatedBy: moderator || 'ADMIN',
+          moderatedBy: moderator || 'SYSTEM',
         },
       });
       return { count: r.count };
@@ -3210,7 +3194,7 @@ export class StorefrontCmsService {
         isActive: true,
         userRoles: {
           some: {
-            role: { name: { in: ['ROOT', 'SUPER_ADMIN', 'ADMIN', 'WEBSITE_MANAGER'] } },
+            role: { name: { in: ['ROOT', 'SUPER_ADMIN', 'WEBSITE_MANAGER'] } },
           },
         },
       },
@@ -3296,7 +3280,7 @@ export class StorefrontCmsService {
       },
     });
 
-    // Notify ALL active ROOT, SUPER_ADMIN, ADMIN, WEBSITE_MANAGER users
+    // Notify ALL active ROOT, SUPER_ADMIN, WEBSITE_MANAGER users
     const admins = await this.getSupportAdminUsers();
     if (admins.length > 0) {
       await this.prisma.notification
@@ -3379,11 +3363,10 @@ export class StorefrontCmsService {
 
     const roleNames = adminUser.userRoles.map((r) => r.role.name);
     const primaryRole =
-      roleNames.find((r) => ['ROOT', 'SUPER_ADMIN', 'WEBSITE_MANAGER', 'ADMIN'].includes(r)) ||
+      roleNames.find((r) => ['ROOT', 'SUPER_ADMIN', 'WEBSITE_MANAGER'].includes(r)) ||
       roleNames[0] ||
-      'ADMIN';
-    const senderLabel =
-      primaryRole === 'ADMIN' ? 'WEBSITE_MANAGER' : primaryRole;
+      'WEBSITE_MANAGER';
+    const senderLabel = primaryRole;
     const senderName = `${adminUser.firstName} ${adminUser.lastName}`.trim();
 
     const msg = await this.prisma.supportMessage.create({
@@ -3475,6 +3458,21 @@ export class StorefrontCmsService {
     if (merged.appName) await this.upsertSetting('branding.app_name', merged.appName, 'branding', updatedBy);
     if (merged.logoUrl) await this.upsertSetting('branding.app_logo_url', merged.logoUrl, 'branding', updatedBy);
     if (merged.faviconUrl) await this.upsertSetting('branding.favicon_url', merged.faviconUrl, 'branding', updatedBy);
+
+    // Bidirectional shared sync -> sys.generalSettings (company/contact details)
+    const genRow = await this.prisma.settings.findUnique({ where: { key: 'sys.generalSettings' } });
+    const genObj = this.parseJsonSetting<Record<string, any>>(genRow?.value, this.getExtendedSysConfigDefault('generalSettings'));
+    const nextGen = {
+      ...genObj,
+      ...(dto.companyName !== undefined ? { companyName: dto.companyName } : {}),
+      ...(dto.taxId !== undefined ? { taxId: dto.taxId } : {}),
+      ...(dto.rcNumber !== undefined ? { rcNumber: dto.rcNumber } : {}),
+      ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+      ...(dto.email !== undefined ? { email: dto.email } : {}),
+      ...(dto.address !== undefined ? { address: dto.address } : {}),
+    };
+    await this.upsertSetting('sys.generalSettings', JSON.stringify(nextGen), 'system', updatedBy);
+
     return this.getPublicConfig();
   }
 
@@ -3824,12 +3822,13 @@ export class StorefrontCmsService {
     });
   }
 
-  async previewEmailTemplate(dto: PreviewEmailTemplateDto) {
+  async previewEmailTemplate(dto: PreviewEmailTemplateDto, mode: 'preview' | 'email' = 'preview') {
     const locale = normalizeEmailLocale(dto.locale);
     const rendered = await renderLocalizedEmail(this.prisma, {
       templateId: dto.templateId,
       templateKey: dto.templateKey,
       locale,
+      mode,
       customSubject: dto.customSubject,
       customBodyHtml: dto.customBodyHtml,
       variables: {
@@ -3871,30 +3870,29 @@ export class StorefrontCmsService {
   }
 
   async sendTestEmailTemplate(dto: SendTestEmailTemplateDto, actorEmail: string) {
-    const preview = await this.previewEmailTemplate(dto);
-    const identity = preview;
+    const rendered = await this.previewEmailTemplate(dto, 'email');
     const mailRes = await sendLoggedSmtpEmail(this.prisma, {
       to: dto.to.trim(),
-      subject: preview.subject,
-      htmlBody: preview.htmlBody,
-      templateId: preview.templateId,
+      subject: rendered.subject,
+      htmlBody: rendered.htmlBody,
+      templateId: rendered.templateId,
     });
     await this.prisma.auditLog.create({
       data: {
         actorEmail,
         action: 'SEND_EMAIL_TEMPLATE_TEST',
         resourceType: 'EMAIL_TEMPLATE',
-        resourceId: identity.templateId || 'CUSTOM',
+        resourceId: rendered.templateId || 'CUSTOM',
         tableName: 'EmailTemplate',
-        description: `Test e-mail (${preview.locale}) envoyé à ${dto.to.trim()}`,
+        description: `Test e-mail (${rendered.locale}) envoyé à ${dto.to.trim()}`,
       },
     });
     return {
       ok: mailRes.accepted,
       to: dto.to.trim(),
-      locale: preview.locale,
-      subject: preview.subject,
-      message: `E-mail de test (${preview.locale}) transmis avec succès à ${dto.to.trim()}.`,
+      locale: rendered.locale,
+      subject: rendered.subject,
+      message: `E-mail de test (${rendered.locale}) transmis avec succès à ${dto.to.trim()}.`,
     };
   }
 
@@ -5260,7 +5258,6 @@ export class StorefrontCmsService {
         { key: '/dashboard/section/users', label: "Vue d'ensemble — Utilisateurs", section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/users', label: 'Tous les utilisateurs (Annuaire)', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/root/superadmins', label: 'Super Admin', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
-        { key: '/dashboard/users/admins', label: 'Administrateurs', section: 'Gestion des utilisateurs', visibility: 'PRIVATE' },
         { key: '/dashboard/users/website-managers', label: 'Website Manager', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/magasiniers', label: 'Magasiniers', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
         { key: '/dashboard/users/caissiers', label: 'Caissiers', section: 'Gestion des utilisateurs', visibility: 'PUBLIC' },
@@ -5606,7 +5603,6 @@ export class StorefrontCmsService {
     const reports = ['/dashboard/analytics', '/dashboard/reports/sales', '/dashboard/reports/treasury'];
     const staffUsersAll = [
       '/dashboard/users',
-      '/dashboard/users/admins',
       '/dashboard/users/website-managers',
       '/dashboard/users/magasiniers',
       '/dashboard/users/caissiers',
@@ -5654,20 +5650,7 @@ export class StorefrontCmsService {
       WEBSITE_MANAGER: [
         '/dashboard',
         ...communityAll,
-        ...staffUsersAll.filter((u) => u !== '/dashboard/users/admins'),
-        ...catalogue,
-        ...treasury,
-        ...purchases,
-        ...stock,
-        ...sales,
-        ...seo,
-        ...reports,
-        ...clientSpace,
-      ],
-      ADMIN: [
-        '/dashboard',
-        ...communityAll,
-        ...staffUsersAll.filter((u) => u !== '/dashboard/users/admins'),
+        ...staffUsersAll,
         ...catalogue,
         ...treasury,
         ...purchases,
@@ -5838,7 +5821,7 @@ export class StorefrontCmsService {
       address: body.address || undefined,
       isVip: Boolean(body.isVip),
     };
-    await this.upsertSetting('sys.customersMeta', JSON.stringify(metaMap), 'system', 'ADMIN');
+    await this.upsertSetting('sys.customersMeta', JSON.stringify(metaMap), 'system', 'SYSTEM');
     return created;
   }
 
@@ -5863,7 +5846,7 @@ export class StorefrontCmsService {
       ...(body.address !== undefined ? { address: body.address } : {}),
       ...(body.isVip !== undefined ? { isVip: Boolean(body.isVip) } : {}),
     };
-    await this.upsertSetting('sys.customersMeta', JSON.stringify(metaMap), 'system', 'ADMIN');
+    await this.upsertSetting('sys.customersMeta', JSON.stringify(metaMap), 'system', 'SYSTEM');
     return updated;
   }
 
@@ -6039,17 +6022,98 @@ export class StorefrontCmsService {
           }, {})
         : value;
     await this.upsertSetting(`sys.${key}`, JSON.stringify(normalizedValue), 'system', updatedBy);
-    if (
-      key === 'generalSettings' &&
+
+    // Bidirectional sync for shared settings across /dashboard/settings, /dashboard/root/tva,
+    // /dashboard/root/storefront/info, /dashboard/coupons and /dashboard/seo/pixels
+    if (key === 'generalSettings' && normalizedValue && typeof normalizedValue === 'object') {
+      const g = normalizedValue as Record<string, any>;
+
+      if (typeof g.canonicalBaseUrl === 'string') {
+        const currentPixels = ((await this.getSysConfig('marketingPixels')).value || {}) as Record<string, any>;
+        if (currentPixels.canonicalBaseUrl !== g.canonicalBaseUrl) {
+          await this.upsertSetting(
+            'sys.marketingPixels',
+            JSON.stringify({ ...currentPixels, canonicalBaseUrl: g.canonicalBaseUrl }),
+            'system',
+            updatedBy,
+          );
+        }
+      }
+
+      if (g.freeShippingThreshold !== undefined || g.defaultShippingFee !== undefined) {
+        if (g.freeShippingThreshold !== undefined) {
+          await this.upsertSetting('shipping.free_threshold', String(Number(g.freeShippingThreshold)), 'shipping', updatedBy);
+        }
+        if (g.defaultShippingFee !== undefined) {
+          await this.upsertSetting('shipping.standard_fee', String(Number(g.defaultShippingFee)), 'shipping', updatedBy);
+        }
+      }
+
+      const idRow = await this.prisma.settings.findUnique({ where: { key: 'cms.identity' } });
+      const snap = this.getDefaultsSnapshot();
+      const currentId = this.parseJsonSetting<Record<string, any>>(idRow?.value, snap.identity || { ...ROYAL_CONTACT_INFO });
+      const nextIdentity = {
+        ...currentId,
+        ...(g.companyName !== undefined ? { companyName: g.companyName } : {}),
+        ...(g.taxId !== undefined ? { taxId: g.taxId } : {}),
+        ...(g.rcNumber !== undefined ? { rcNumber: g.rcNumber } : {}),
+        ...(g.phone !== undefined ? { phone: g.phone } : {}),
+        ...(g.email !== undefined ? { email: g.email } : {}),
+        ...(g.address !== undefined ? { address: g.address } : {}),
+      };
+      await this.upsertSetting('cms.identity', JSON.stringify(nextIdentity), 'cms', updatedBy);
+
+      if (g.vatStandard !== undefined || g.vatReduced !== undefined) {
+        const currentTvaList = ((await this.getSysConfig('tva')).value || []) as any[];
+        if (Array.isArray(currentTvaList) && currentTvaList.length > 0) {
+          const stdRate = g.vatStandard !== undefined ? Number(g.vatStandard) : undefined;
+          const redRate = g.vatReduced !== undefined ? Number(g.vatReduced) : undefined;
+          let tvaChanged = false;
+          const updatedTva = currentTvaList.map((item: any) => {
+            if (stdRate !== undefined && item?.isDefault) {
+              if (Number(item.rate) !== stdRate) tvaChanged = true;
+              return { ...item, rate: stdRate };
+            }
+            if (redRate !== undefined && (item?.code === 'TVA7' || item?.id === 'tva-7')) {
+              if (Number(item.rate) !== redRate) tvaChanged = true;
+              return { ...item, rate: redRate };
+            }
+            return item;
+          });
+          if (tvaChanged) {
+            await this.upsertSetting('sys.tva', JSON.stringify(updatedTva), 'system', updatedBy);
+          }
+        }
+        if (g.vatStandard !== undefined) {
+          await this.upsertSetting('store.tax_rate', String(Number(g.vatStandard) / 100), 'store', updatedBy);
+        }
+      }
+    } else if (key === 'tva' && Array.isArray(normalizedValue)) {
+      const defItem = normalizedValue.find((r: any) => r?.isDefault && r?.isActive !== false) || normalizedValue[0];
+      const redItem = normalizedValue.find((r: any) => r?.code === 'TVA7' || r?.id === 'tva-7');
+      const genRow = await this.prisma.settings.findUnique({ where: { key: 'sys.generalSettings' } });
+      const genObj = this.parseJsonSetting<Record<string, any>>(genRow?.value, this.getExtendedSysConfigDefault('generalSettings'));
+      if (defItem?.rate !== undefined) {
+        const nextGen = {
+          ...genObj,
+          vatStandard: Number(defItem.rate),
+          ...(redItem?.rate !== undefined ? { vatReduced: Number(redItem.rate) } : {}),
+        };
+        await this.upsertSetting('sys.generalSettings', JSON.stringify(nextGen), 'system', updatedBy);
+        await this.upsertSetting('store.tax_rate', String(Number(defItem.rate) / 100), 'store', updatedBy);
+      }
+    } else if (
+      key === 'marketingPixels' &&
       normalizedValue &&
       typeof normalizedValue === 'object' &&
-      typeof normalizedValue.canonicalBaseUrl === 'string'
+      typeof (normalizedValue as any).canonicalBaseUrl === 'string'
     ) {
-      const currentPixels = ((await this.getSysConfig('marketingPixels')).value || {}) as Record<string, any>;
-      if (currentPixels.canonicalBaseUrl !== normalizedValue.canonicalBaseUrl) {
+      const genRow = await this.prisma.settings.findUnique({ where: { key: 'sys.generalSettings' } });
+      const genObj = this.parseJsonSetting<Record<string, any>>(genRow?.value, this.getExtendedSysConfigDefault('generalSettings'));
+      if (genObj.canonicalBaseUrl !== (normalizedValue as any).canonicalBaseUrl) {
         await this.upsertSetting(
-          'sys.marketingPixels',
-          JSON.stringify({ ...currentPixels, canonicalBaseUrl: normalizedValue.canonicalBaseUrl }),
+          'sys.generalSettings',
+          JSON.stringify({ ...genObj, canonicalBaseUrl: (normalizedValue as any).canonicalBaseUrl }),
           'system',
           updatedBy,
         );
@@ -6279,8 +6343,28 @@ export class StorefrontCmsService {
     }
 
     const frontendOrigin = (process.env.FRONTEND_URL || 'https://royal.com.tn').replace(/\/+$/, '');
-    const successLink = dto.successUrl || `${frontendOrigin}/order-confirmation/${encodeURIComponent(dto.orderReference)}?paid=flouci`;
-    const failLink = dto.failUrl || `${frontendOrigin}/checkout?paymentError=flouci&ref=${encodeURIComponent(dto.orderReference)}`;
+    const resolveFlouciUrl = (configuredUrl: unknown, defaultUrl: string) => {
+      const raw = String(configuredUrl || '').trim();
+      if (!raw) return defaultUrl;
+      const expanded = raw.replace(/\{orderReference\}|\{ref\}/gi, encodeURIComponent(dto.orderReference));
+      return /^https?:\/\//i.test(expanded)
+        ? expanded
+        : `${frontendOrigin}${expanded.startsWith('/') ? '' : '/'}${expanded}`;
+    };
+    const defaultSuccess = `${frontendOrigin}/order-confirmation/${encodeURIComponent(dto.orderReference)}?paid=flouci`;
+    const defaultFail = `${frontendOrigin}/checkout?paymentError=flouci&ref=${encodeURIComponent(dto.orderReference)}`;
+    const cfgSuccess = String(flouci.successUrl || '').trim();
+    const cfgFail = String(flouci.failUrl || '').trim();
+    const successLink =
+      dto.successUrl ||
+      (cfgSuccess && cfgSuccess !== '/order-confirmation'
+        ? resolveFlouciUrl(cfgSuccess, defaultSuccess)
+        : defaultSuccess);
+    const failLink =
+      dto.failUrl ||
+      (cfgFail && cfgFail !== '/checkout?paymentError=flouci'
+        ? resolveFlouciUrl(cfgFail, defaultFail)
+        : defaultFail);
 
     const res = await fetch('https://developers.flouci.com/api/generate_payment', {
       method: 'POST',

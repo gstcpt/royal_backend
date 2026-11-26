@@ -87,13 +87,13 @@ export class UsersService {
 
     await this.prisma.settings.upsert({
       where: { key: 'sys.userAssignments' },
-      update: { value: JSON.stringify(currentMap), group: 'system', updatedBy: updatedBy || 'ADMIN' },
+      update: { value: JSON.stringify(currentMap), group: 'system', updatedBy: updatedBy || 'SYSTEM' },
       create: {
         key: 'sys.userAssignments',
         value: JSON.stringify(currentMap),
         group: 'system',
         isSecret: false,
-        updatedBy: updatedBy || 'ADMIN',
+        updatedBy: updatedBy || 'SYSTEM',
       },
     });
   }
@@ -214,7 +214,6 @@ export class UsersService {
         SUPERADMIN: ['SUPER_ADMIN'],
         SUPER_ADMIN: ['SUPER_ADMIN'],
         WEBSITE_MANAGER: ['WEBSITE_MANAGER'],
-        ADMIN: ['ADMIN'],
         MAGASINIER: ['STOCK_MANAGER'],
         STOCK_MANAGER: ['STOCK_MANAGER'],
         CAISSIER: ['CASHIER'],

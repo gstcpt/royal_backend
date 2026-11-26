@@ -551,13 +551,17 @@ export async function ensureDeliverySystemDocumentDefaults(prisma: PrismaClient)
     }
   }
 
-  // 4. Keep sys.visibility clean (remove delivery-managers/agents; add delivery-companies & root/delivery-settings as PRIVATE)
+  // 4. Keep sys.visibility clean (remove delivery-managers/agents & users/admins; add delivery-companies & root/delivery-settings as PRIVATE)
   const visRow = await prisma.settings.findUnique({ where: { key: 'sys.visibility' } });
   if (visRow?.value) {
     try {
       const visArr = typeof visRow.value === 'string' ? JSON.parse(visRow.value) : visRow.value;
       if (Array.isArray(visArr)) {
-        const obsoleteKeys = new Set(['/dashboard/users/delivery-managers', '/dashboard/users/delivery-agents']);
+        const obsoleteKeys = new Set([
+          '/dashboard/users/delivery-managers',
+          '/dashboard/users/delivery-agents',
+          '/dashboard/users/admins',
+        ]);
         const filtered = visArr.filter((v: any) => !obsoleteKeys.has(v?.key));
         let changed = filtered.length !== visArr.length;
         const requiredNew = [
@@ -607,10 +611,17 @@ export async function ensureDeliverySystemDocumentDefaults(prisma: PrismaClient)
           delete rvObj.DELIVERY_AGENT;
           changed = true;
         }
+        if ('ADMIN' in rvObj) {
+          delete rvObj.ADMIN;
+          changed = true;
+        }
         for (const [k, arr] of Object.entries(rvObj)) {
           if (Array.isArray(arr)) {
             const next = arr.filter(
-              (p) => p !== '/dashboard/users/delivery-managers' && p !== '/dashboard/users/delivery-agents',
+              (p) =>
+                p !== '/dashboard/users/delivery-managers' &&
+                p !== '/dashboard/users/delivery-agents' &&
+                p !== '/dashboard/users/admins',
             );
             if (next.length !== arr.length) {
               rvObj[k] = next;
@@ -630,7 +641,7 @@ export async function ensureDeliverySystemDocumentDefaults(prisma: PrismaClient)
     }
   }
 
-  // 6. Ensure delivery_companies CRUD permissions exist & grant to ROOT / SUPER_ADMIN / WEBSITE_MANAGER / ADMIN
+  // 6. Ensure delivery_companies CRUD permissions exist & grant to ROOT / SUPER_ADMIN / WEBSITE_MANAGER
   const dcActions = ['read', 'read_list', 'read_detail', 'create', 'update', 'delete', 'manage'];
   const createdIds: string[] = [];
   for (const act of dcActions) {
@@ -655,7 +666,7 @@ export async function ensureDeliverySystemDocumentDefaults(prisma: PrismaClient)
     createdIds.push(p.id);
   }
   const privilegedRoles = await prisma.role.findMany({
-    where: { name: { in: ['ROOT', 'SUPER_ADMIN', 'WEBSITE_MANAGER', 'ADMIN'] } },
+    where: { name: { in: ['ROOT', 'SUPER_ADMIN', 'WEBSITE_MANAGER'] } },
   });
   for (const role of privilegedRoles) {
     for (const permissionId of createdIds) {

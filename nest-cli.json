@@ -5,7 +5,8 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "assets": [
-      "modules/**/*.json"
+      "modules/**/*.json",
+      "assets/**/*"
     ]
   }
 }

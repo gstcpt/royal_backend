@@ -193,12 +193,6 @@ export const CANONICAL_RBAC_SECTIONS: CanonicalRbacSection[] = [
         visibility: 'PRIVATE',
       },
       {
-        path: '/dashboard/users/admins',
-        labelFr: 'Administrateurs',
-        defaultPermissionCode: 'users.read',
-        visibility: 'PRIVATE',
-      },
-      {
         path: '/dashboard/users/website-managers',
         labelFr: 'Website Manager',
         defaultPermissionCode: 'website_managers.read_list',
@@ -738,7 +732,6 @@ const MODULE_PRIMARY_ROUTES: Record<string, Array<{ viewPath: string; viewLabelF
   users: [
     { viewPath: '/dashboard/section/users', viewLabelFr: "Vue d'ensemble — Utilisateurs" },
     { viewPath: '/dashboard/users', viewLabelFr: 'Tous les utilisateurs' },
-    { viewPath: '/dashboard/users/admins', viewLabelFr: 'Administrateurs' },
     { viewPath: '/dashboard/users/marketing', viewLabelFr: 'Marketing' },
     { viewPath: '/dashboard/users/clients', viewLabelFr: 'Clients (Comptes RBAC)' },
   ],

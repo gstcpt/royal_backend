@@ -64,6 +64,7 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { RootOnlyGuard } from '../../common/guards/root-only.guard';
 
 @ApiTags('Storefront CMS & Contact')
 @Controller('storefront-cms')
@@ -597,40 +598,35 @@ export class StorefrontCmsController {
 
   @Patch('cms/identity')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   updateCmsIdentity(@Body() dto: UpdateCmsIdentityDto, @Req() req: any) {
     return this.service.updateCmsIdentity(dto, req.user?.email);
   }
 
   @Patch('cms/layout')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   updateCmsLayout(@Body() dto: UpdateCmsLayoutDto, @Req() req: any) {
     return this.service.updateCmsLayout(dto, req.user?.email);
   }
 
   @Patch('cms/views')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   updateCmsViews(@Body() dto: UpdateCmsViewsDto, @Req() req: any) {
     return this.service.updateCmsViews(dto, req.user?.email);
   }
 
   @Post('cms/reset-defaults')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   resetCmsDefaults(@Req() req: any, @Body() dto?: ResetCmsDefaultsDto) {
     return this.service.resetCmsDefaults(req.user?.email, dto?.scope, dto?.viewKey);
   }
 
   @Get('cms/custom-views')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:read')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   listCustomViewsAdmin() {
     return this.service.listCustomViews(true);
   }
@@ -643,24 +639,21 @@ export class StorefrontCmsController {
 
   @Post('cms/custom-views')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   createCustomView(@Body() dto: UpsertCustomViewDto, @Req() req: any) {
     return this.service.upsertCustomView(null, dto, req.user?.email);
   }
 
   @Patch('cms/custom-views/:id')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   updateCustomView(@Param('id') id: string, @Body() dto: UpsertCustomViewDto, @Req() req: any) {
     return this.service.upsertCustomView(id, dto, req.user?.email);
   }
 
   @Delete('cms/custom-views/:id')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   deleteCustomView(@Param('id') id: string, @Req() req: any) {
     return this.service.deleteCustomView(id, req.user?.email);
   }
@@ -729,8 +722,7 @@ export class StorefrontCmsController {
 
   @Post('cms/email-templates/send-test')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   @ApiOperation({ summary: 'Envoyer un e-mail de test HTML (FR ou AR) via SMTP' })
   sendTestEmailTemplate(@Body() dto: SendTestEmailTemplateDto, @Req() req: any) {
     return this.service.sendTestEmailTemplate(dto, req.user?.email || 'ROOT');
@@ -738,8 +730,7 @@ export class StorefrontCmsController {
 
   @Post('cms/email-templates/:id/reset-default')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   @ApiOperation({ summary: 'Restaurer un modèle par défaut FR/AR Light Luxury' })
   resetEmailTemplateDefault(@Param('id') id: string) {
     return this.service.resetEmailTemplateDefault(id);
@@ -747,8 +738,7 @@ export class StorefrontCmsController {
 
   @Get('cms/email-logs')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:read|audit:read')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   @ApiOperation({ summary: 'Historique récent des envois e-mail SMTP (email_logs)' })
   listEmailLogs(@Query('limit') limit?: string) {
     return this.service.listEmailLogs(limit ? Number(limit) : 50);
@@ -756,24 +746,21 @@ export class StorefrontCmsController {
 
   @Post('cms/email-templates')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   createEmailTemplate(@Body() dto: UpsertEmailTemplateDto) {
     return this.service.upsertEmailTemplate(null, dto);
   }
 
   @Patch('cms/email-templates/:id')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   updateEmailTemplate(@Param('id') id: string, @Body() dto: Partial<UpsertEmailTemplateDto>) {
     return this.service.upsertEmailTemplate(id, dto);
   }
 
   @Delete('cms/email-templates/:id')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-  @Permissions('settings:update')
+  @UseGuards(JwtAuthGuard, RootOnlyGuard)
   deleteEmailTemplate(@Param('id') id: string) {
     return this.service.deleteEmailTemplate(id);
   }
