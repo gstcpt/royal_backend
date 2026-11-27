@@ -21,6 +21,7 @@ export class StockTransfersService {
     const rows = await this.prisma.stockTransfer.findMany({
       where,
       orderBy: { createdAt: 'desc' },
+      take: 500,
       include: {
         fromWarehouse: { select: { id: true, name: true, code: true, city: true } },
         toWarehouse: { select: { id: true, name: true, code: true, city: true } },

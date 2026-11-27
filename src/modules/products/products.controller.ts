@@ -8,6 +8,7 @@ import {
   Body,
   Param,
   Query,
+  Req,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -76,8 +77,8 @@ export class ProductsController {
   @ApiOperation({ summary: 'Détails d’un produit par ID' })
   @ApiResponse({ status: 200, description: 'Produit trouvé' })
   @ApiResponse({ status: 404, description: 'Produit introuvable' })
-  async findById(@Param('id') id: string) {
-    return this.productsService.findById(id);
+  async findById(@Param('id') id: string, @Req() req?: any) {
+    return this.productsService.findById(id, req?.user);
   }
 
   @Get()

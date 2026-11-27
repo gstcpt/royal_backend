@@ -59,7 +59,7 @@ export class PosController {
   }
 
   @Get('registers/:id/session')
-  @Permissions('pos:operate', 'pos:view')
+  @Permissions('pos:operate|pos:view')
   @ApiOperation({ summary: 'Consulter la session active d’une caisse' })
   @ApiResponse({ status: 200, description: 'Détails de la session active' })
   getCurrentSession(@Param('id') registerId: string) {

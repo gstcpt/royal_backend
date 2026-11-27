@@ -4,6 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { PrismaService } from '../../../database/prisma.service';
+import { getJwtAccessSecret } from '../../../common/utils/security.util';
 import { UserJwtPayload } from '@royal/shared-types';
 
 interface CachedSessionEntry {
@@ -46,7 +47,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         },
       ]),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_ACCESS_SECRET') || 'royal_jwt_super_access_secret_key_dev_2026!',
+      secretOrKey: getJwtAccessSecret(configService),
     });
   }
 

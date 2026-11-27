@@ -8,6 +8,7 @@ import {
   Body,
   Param,
   Query,
+  Req,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -106,8 +107,11 @@ export class UsersController {
   async resetPassword(
     @Param('id') id: string,
     @CurrentUser('id') currentUserId: string,
+    @Req() req?: any,
   ) {
-    return this.usersService.resetPassword(id, currentUserId);
+    const rawLang = String(req?.headers?.['accept-language'] || '').toLowerCase();
+    const locale: 'FR' | 'AR' = rawLang.startsWith('ar') ? 'AR' : 'FR';
+    return this.usersService.resetPassword(id, currentUserId, locale);
   }
 
   @Patch(':id/email-verification')
@@ -123,7 +127,9 @@ export class UsersController {
   @Post(':id/send-verification-code')
   @Permissions('users.update')
   @ApiOperation({ summary: 'Envoyer un nouveau code OTP de vérification e-mail via SMTP' })
-  async sendVerificationCode(@Param('id') id: string) {
-    return this.usersService.adminSendVerificationCode(id);
+  async sendVerificationCode(@Param('id') id: string, @Req() req?: any) {
+    const rawLang = String(req?.headers?.['accept-language'] || '').toLowerCase();
+    const locale: 'FR' | 'AR' = rawLang.startsWith('ar') ? 'AR' : 'FR';
+    return this.usersService.adminSendVerificationCode(id, locale);
   }
 }

@@ -47,15 +47,19 @@ export class UsersService {
   }
 
   /**
-   * Helper to check if any roleId in a list is the ROOT role
+   * Helper to check if any roleId in a list matches a protected system role
    */
-  private async containsRootRole(roleIds: string[]): Promise<boolean> {
+  private async containsRoleName(roleIds: string[], roleName: string): Promise<boolean> {
     if (!roleIds || roleIds.length === 0) return false;
-    const rootRole = await this.prisma.role.findUnique({
-      where: { name: SystemRole.ROOT },
+    const role = await this.prisma.role.findUnique({
+      where: { name: roleName },
     });
-    if (!rootRole) return false;
-    return roleIds.includes(rootRole.id);
+    if (!role) return false;
+    return roleIds.includes(role.id);
+  }
+
+  private containsRootRole(roleIds: string[]): Promise<boolean> {
+    return this.containsRoleName(roleIds, SystemRole.ROOT);
   }
 
   private async loadAssignmentsMap(): Promise<Record<string, UserAssignmentRecord>> {
@@ -459,11 +463,18 @@ export class UsersService {
       throw new ConflictException('Un utilisateur existe déjà avec cet email');
     }
 
-    // HARD-CODED ROOT PROTECTION: Cannot assign ROOT role via API
+    // HARD-CODED ROOT & SUPER_ADMIN PROTECTION
     if (createUserDto.roleIds && (await this.containsRootRole(createUserDto.roleIds))) {
       throw new ForbiddenException(
         "Le rôle ROOT ne peut jamais être assigné ou propagé via l'API",
       );
+    }
+    if (
+      createUserDto.roleIds &&
+      (await this.containsRoleName(createUserDto.roleIds, SystemRole.SUPER_ADMIN)) &&
+      (!currentUserId || !(await this.isUserRoot(currentUserId)))
+    ) {
+      throw new ForbiddenException('Seul le compte ROOT peut créer un Super Administrateur.');
     }
 
     const passwordHash = await argon2.hash(createUserDto.password);
@@ -531,6 +542,11 @@ export class UsersService {
     const isTargetRoot = await this.isUserRoot(id);
 
     if (isTargetRoot) {
+      if (currentUserId !== id) {
+        throw new ForbiddenException(
+          'Seul le compte ROOT principal peut modifier ses propres informations',
+        );
+      }
       if (updateUserDto.isActive === false) {
         throw new ForbiddenException(
           'Impossible de désactiver le compte ROOT principal',
@@ -541,11 +557,14 @@ export class UsersService {
           'Impossible de modifier les rôles assignés au compte ROOT',
         );
       }
-      if (updateUserDto.password && currentUserId !== id) {
-        throw new ForbiddenException(
-          'Seul le titulaire du compte ROOT peut modifier son propre mot de passe',
-        );
-      }
+    }
+
+    if (
+      updateUserDto.roleIds &&
+      (await this.containsRoleName(updateUserDto.roleIds, SystemRole.SUPER_ADMIN)) &&
+      (!currentUserId || !(await this.isUserRoot(currentUserId)))
+    ) {
+      throw new ForbiddenException('Seul le compte ROOT peut attribuer le rôle SUPER_ADMIN.');
     }
 
     if (updateUserDto.roleIds && (await this.containsRootRole(updateUserDto.roleIds))) {
@@ -780,7 +799,7 @@ export class UsersService {
    * Regenerates a cryptographically strong password and sends it by SMTP email to the user.
    * Only persists the new password hash if SMTP delivery succeeds so the account is never locked out on mail error.
    */
-  async resetPassword(id: string, currentUserId?: string) {
+  async resetPassword(id: string, currentUserId?: string, locale: 'FR' | 'AR' = 'FR') {
     const user = await this.prisma.user.findFirst({
       where: { id, deletedAt: null },
     });
@@ -814,8 +833,8 @@ export class UsersService {
     try {
       const rendered = await renderLocalizedEmail(this.prisma, {
         templateKey: 'auth:password_reset_admin',
-        locale: 'FR',
-        badgeText: 'Sécurité Compte',
+        locale,
+        badgeText: locale === 'AR' ? 'أمان الحساب' : 'Sécurité Compte',
         variables: {
           firstName: user.firstName,
           lastName: user.lastName,
@@ -916,7 +935,7 @@ export class UsersService {
   /**
    * Generates a 6-digit OTP verification code and sends it via SMTP to the user.
    */
-  async adminSendVerificationCode(id: string) {
+  async adminSendVerificationCode(id: string, locale: 'FR' | 'AR' = 'FR') {
     const user = await this.prisma.user.findFirst({
       where: { id, deletedAt: null },
     });
@@ -943,8 +962,8 @@ export class UsersService {
 
     const otpRendered = await renderLocalizedEmail(this.prisma, {
       templateKey: 'auth:verify_email',
-      locale: 'FR',
-      badgeText: 'Code Vérification',
+      locale,
+      badgeText: locale === 'AR' ? 'رمز التحقق' : 'Code Vérification',
       variables: {
         firstName: user.firstName,
         lastName: user.lastName,

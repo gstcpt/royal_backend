@@ -8,6 +8,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
 import { PrismaService } from '../../database/prisma.service';
+import {
+  assertSafeExternalHost,
+  generateOrderProofToken,
+} from '../../common/utils/security.util';
 import { storeMediaAsset } from './utils/media-storage.helper';
 import { buildDocumentPdfBuffer } from './utils/pdf-smtp.helper';
 import {
@@ -622,7 +626,9 @@ export class StorefrontCmsService {
       header,
       footer,
       views,
-      customViews: Array.isArray(customViews) ? customViews : [],
+      customViews: Array.isArray(customViews)
+        ? customViews.filter((cv: any) => cv?.isPublished !== false)
+        : [],
       globalCustomCode,
       heroSlides,
       defaults: snap,
@@ -2294,43 +2300,64 @@ export class StorefrontCmsService {
     };
   }
 
+  private async resolveNotificationOwnerFilter(scopedUserId?: string) {
+    if (!scopedUserId) return {};
+    const customer = await this.prisma.customer.findUnique({
+      where: { userId: scopedUserId },
+      select: { id: true },
+    });
+    return {
+      OR: [
+        { userId: scopedUserId },
+        ...(customer?.id ? [{ customerId: customer.id }] : []),
+      ],
+    };
+  }
+
   async bulkActionNotifications(
     ids: string[],
     action: 'MARK_READ' | 'MARK_UNREAD' | 'DELETE',
+    scopedUserId?: string,
   ) {
     const cleanIds = Array.from(new Set((ids || []).filter(Boolean)));
     if (cleanIds.length === 0) return { count: 0 };
+    const ownerFilter = await this.resolveNotificationOwnerFilter(scopedUserId);
+    const where = { id: { in: cleanIds }, ...ownerFilter };
     if (action === 'DELETE') {
-      const r = await this.prisma.notification.deleteMany({ where: { id: { in: cleanIds } } });
+      const r = await this.prisma.notification.deleteMany({ where });
       return { count: r.count };
     }
     const markRead = action === 'MARK_READ';
     const r = await this.prisma.notification.updateMany({
-      where: { id: { in: cleanIds } },
+      where,
       data: { isRead: markRead, readAt: markRead ? new Date() : null },
     });
     return { count: r.count };
   }
 
-  async toggleNotificationRead(id: string, _userId: string) {
-    const n = await this.prisma.notification.findUnique({ where: { id } });
+  async toggleNotificationRead(id: string, userId: string, clientScoped = false) {
+    const ownerFilter = clientScoped ? await this.resolveNotificationOwnerFilter(userId) : {};
+    const n = await this.prisma.notification.findFirst({ where: { id, ...ownerFilter } });
     if (!n) throw new NotFoundException('Notification introuvable');
     return this.prisma.notification.update({
-      where: { id },
+      where: { id: n.id },
       data: { isRead: !n.isRead, readAt: !n.isRead ? new Date() : null },
     });
   }
 
-  async markAllNotificationsRead(_userId: string) {
+  async markAllNotificationsRead(userId: string, clientScoped = false) {
+    const ownerFilter = clientScoped ? await this.resolveNotificationOwnerFilter(userId) : {};
     await this.prisma.notification.updateMany({
-      where: { isRead: false },
+      where: { isRead: false, ...ownerFilter },
       data: { isRead: true, readAt: new Date() },
     });
     return { success: true };
   }
 
-  async deleteNotification(id: string) {
-    await this.prisma.notification.delete({ where: { id } });
+  async deleteNotification(id: string, scopedUserId?: string) {
+    const ownerFilter = await this.resolveNotificationOwnerFilter(scopedUserId);
+    const res = await this.prisma.notification.deleteMany({ where: { id, ...ownerFilter } });
+    if (res.count === 0) throw new NotFoundException('Notification introuvable');
     return { deleted: true };
   }
 
@@ -2522,8 +2549,10 @@ export class StorefrontCmsService {
       id: p.id,
       sku: p.sku,
       name: p.name,
+      nameAr: p.nameAr || null,
       slug: p.slug,
       shortDescription: p.shortDescription,
+      shortDescAr: p.shortDescAr || null,
       sellingPrice: sp,
       discountPrice: dp,
       discountPercent: discountPct,
@@ -2712,33 +2741,10 @@ export class StorefrontCmsService {
       }),
     ]);
 
-    const [reactions, reviews, wishlists, orders] = await Promise.all([
-      custReactions.length > 0
-        ? custReactions
-        : this.prisma.productLike.findMany({
-            orderBy: { createdAt: 'desc' },
-            take: 20,
-            include: { product: { include: this.cardInclude } },
-          }),
-      custReviews.length > 0
-        ? custReviews
-        : this.prisma.review.findMany({
-            orderBy: { updatedAt: 'desc' },
-            take: 20,
-            include: { product: { include: this.cardInclude } },
-          }),
-      Promise.resolve(custWishlists),
-      custOrders.length > 0
-        ? custOrders
-        : this.prisma.order.findMany({
-            where: { isDeleted: false },
-            orderBy: { createdAt: 'desc' },
-            take: 20,
-            include: {
-              items: { include: { product: { include: this.cardInclude } } },
-            },
-          }),
-    ]);
+    const reactions = custReactions;
+    const reviews = custReviews;
+    const wishlists = custWishlists;
+    const orders = custOrders;
 
     const likedProducts = (reactions as any[])
       .filter((r) => (r.reaction || 'LIKE') === 'LIKE' && r.product && !r.product.deletedAt)
@@ -2826,40 +2832,10 @@ export class StorefrontCmsService {
       }),
     ]);
 
-    const [orders, reviews, reactions, wishlists] = await Promise.all([
-      custOrders.length > 0
-        ? custOrders
-        : this.prisma.order.findMany({
-            where: { isDeleted: false },
-            orderBy: { createdAt: 'desc' },
-            take: 15,
-            include: {
-              statusHistory: { orderBy: { createdAt: 'desc' } },
-              items: { take: 4, include: { product: { include: { images: { take: 1 } } } } },
-            },
-          }),
-      custReviews.length > 0
-        ? custReviews
-        : this.prisma.review.findMany({
-            orderBy: { updatedAt: 'desc' },
-            take: 15,
-            include: { product: { include: this.cardInclude } },
-          }),
-      custReactions.length > 0
-        ? custReactions
-        : this.prisma.productLike.findMany({
-            orderBy: { createdAt: 'desc' },
-            take: 15,
-            include: { product: { include: this.cardInclude } },
-          }),
-      custWishlists.length > 0
-        ? custWishlists
-        : this.prisma.wishlist.findMany({
-            orderBy: { createdAt: 'desc' },
-            take: 15,
-            include: { product: { include: this.cardInclude } },
-          }),
-    ]);
+    const orders = custOrders;
+    const reviews = custReviews;
+    const reactions = custReactions;
+    const wishlists = custWishlists;
 
     const events: Array<{
       id: string;
@@ -3013,8 +2989,9 @@ export class StorefrontCmsService {
     const [ownPersonalRows, recentOrderHistory, newestProducts, promoProducts, activeCoupons] =
       await Promise.all([
         this.prisma.notification.findMany({
-          where: { OR: [{ userId }, { userId: null }] },
+          where: { OR: [{ userId }, { customerId: customer.id }] },
           orderBy: { createdAt: 'desc' },
+          take: 100,
         }),
         this.prisma.orderStatusHistory.findMany({
           where: { order: { customerId: customer.id, isDeleted: false } },
@@ -3059,12 +3036,7 @@ export class StorefrontCmsService {
         }),
       ]);
 
-    const personalRows =
-      ownPersonalRows.length > 0
-        ? ownPersonalRows
-        : await this.prisma.notification.findMany({
-            orderBy: { createdAt: 'desc' },
-          });
+    const personalRows = ownPersonalRows;
 
     const notifications = personalRows.map((n) => {
       const meta = (n.metadata as any) || {};
@@ -3209,21 +3181,13 @@ export class StorefrontCmsService {
 
   async getMySupportThreads(userId: string) {
     const { customer } = await this.resolveOrCreateCustomer(userId);
-    let threads = await this.prisma.supportThread.findMany({
+    const threads = await this.prisma.supportThread.findMany({
       where: { customerId: customer.id },
       orderBy: { updatedAt: 'desc' },
       include: {
         messages: { orderBy: { createdAt: 'asc' } },
       },
     });
-    if (threads.length === 0) {
-      threads = await this.prisma.supportThread.findMany({
-        orderBy: { updatedAt: 'desc' },
-        include: {
-          messages: { orderBy: { createdAt: 'asc' } },
-        },
-      });
-    }
 
     // Mark admin replies as read when client views
     await this.prisma.supportMessage
@@ -4042,7 +4006,7 @@ export class StorefrontCmsService {
           templateKey: dto.templateKey || 'campaign:promo_general',
           locale,
           customSubject: dto.subject,
-          customBodyHtml: dto.bodyHtml,
+          customBodyHtml: undefined,
           badgeText: locale === 'AR' ? 'حملة ترويجية' : 'Campagne Royal',
           variables: {
             firstName: greetingName,
@@ -4098,10 +4062,7 @@ export class StorefrontCmsService {
 
   async listProspects() {
     const row = await this.prisma.settings.findUnique({ where: { key: 'crm.prospects' } });
-    return this.parseJsonSetting<any[]>(row?.value, [
-      { id: 'pros-1', companyName: 'Import Electro Méditerranée', contactName: 'Nabil Trabelsi', phone: '+216 71 900 120', email: 'nabil@med-electro.tn', city: 'Tunis', specialty: 'Petit Électroménager', status: 'CONTACTED', notes: 'Catalogue tarifaire demandé — sans commande BC pour l’instant', createdAt: new Date().toISOString() },
-      { id: 'pros-2', companyName: 'Sfax Distribution Pro', contactName: 'Hatem Gargouri', phone: '+216 74 220 840', email: 'contact@sfaxdist.tn', city: 'Sfax', specialty: 'Cuisson & Fours', status: 'QUALIFIED', notes: 'À convertir en fiche fournisseur officielle après validation devis', createdAt: new Date().toISOString() },
-    ]);
+    return this.parseJsonSetting<any[]>(row?.value, []);
   }
 
   async saveProspects(prospects: any[], updatedBy?: string) {
@@ -4942,6 +4903,12 @@ export class StorefrontCmsService {
 
     const safeExt = allowedExts.includes(ext) ? ext : '.png';
     const mimeType = file.mimetype || (safeExt === '.svg' ? 'image/svg+xml' : `image/${safeExt.replace('.', '')}`);
+    if (safeExt === '.svg' || mimeType.toLowerCase().includes('svg')) {
+      const svgText = file.buffer.toString('utf8');
+      if (/<\s*(script|foreignObject|iframe|object|embed)\b|javascript\s*:|\bon[a-z]+\s*=/i.test(svgText)) {
+        throw new BadRequestException('Fichier SVG rejeté pour des raisons de sécurité (scripts/événements interdits).');
+      }
+    }
     const filename = `royal-brand-${Date.now()}-${Math.floor(Math.random() * 1000)}${safeExt}`;
 
     const storageRow = await this.prisma.settings.findUnique({ where: { key: 'sys.mediaStorage' } });
@@ -5689,14 +5656,15 @@ export class StorefrontCmsService {
       ];
     }
     const usePagination = Number(limit) > 0;
-    const take = usePagination ? Math.max(1, Number(limit)) : undefined;
-    const skip = usePagination ? (Math.max(1, Number(page || 1)) - 1) * take! : undefined;
+    const take = usePagination ? Math.min(500, Math.max(1, Number(limit))) : 500;
+    const skip = usePagination ? (Math.max(1, Number(page || 1)) - 1) * take : 0;
 
     const [totalCustomers, customers, orderStats, metaRow] = await Promise.all([
       this.prisma.customer.count({ where }),
       this.prisma.customer.findMany({
         where,
-        ...(take ? { skip, take } : {}),
+        ...(skip > 0 ? { skip } : {}),
+        take,
         orderBy: { createdAt: 'desc' },
         include: {
           addresses: { orderBy: { isDefault: 'desc' }, take: 2 },
@@ -5951,6 +5919,12 @@ export class StorefrontCmsService {
         value: merged,
         updatedAt: row?.updatedAt || null,
       };
+    } else if (key === 'carrierWebhooks' && Array.isArray(parsed)) {
+      result = {
+        key,
+        value: parsed,
+        updatedAt: row?.updatedAt || null,
+      };
     } else {
       result = {
         key,
@@ -5962,6 +5936,172 @@ export class StorefrontCmsService {
       this.sysConfigCache.set(key, { value: result, expiresAt: Date.now() + 15000 });
     }
     return result;
+  }
+
+  async assertSysConfigAccess(user: any, key: string, isWrite: boolean): Promise<{ isRoot: boolean }> {
+    const rawRoles = Array.isArray(user?.roles)
+      ? user.roles.map((r: any) => (typeof r === 'string' ? r : r?.role || r?.name)).filter(Boolean)
+      : [user?.role].filter(Boolean);
+    const roles = rawRoles.map((r: any) => String(r).toUpperCase());
+    if (roles.includes('ROOT')) {
+      return { isRoot: true };
+    }
+    if (roles.length === 0 || roles.every((r) => r === 'CLIENT')) {
+      throw new ForbiddenException('Accès réservé au personnel administratif Royal.');
+    }
+
+    const rootOnlyReadKeys = new Set([
+      'mediaStorage',
+      'paymentGateways',
+      'aiProvider',
+      'smtp',
+      'systemFailures',
+      'visibility',
+      'roleViews',
+    ]);
+    const rootOnlyWriteKeys = new Set([
+      ...rootOnlyReadKeys,
+      'printers',
+      'carrierWebhooks',
+    ]);
+    if (rootOnlyReadKeys.has(key) || (isWrite && rootOnlyWriteKeys.has(key))) {
+      throw new ForbiddenException('Seul le compte ROOT peut accéder à cette configuration système sensible.');
+    }
+
+    const rolePerms = await this.prisma.rolePermission.findMany({
+      where: { role: { name: { in: roles } } },
+      select: { permission: { select: { module: true, action: true } } },
+    });
+    const permSet = new Set(
+      rolePerms.map((rp) => `${rp.permission.module}:${rp.permission.action}`.toLowerCase()),
+    );
+    const isSuperAdmin = roles.includes('SUPER_ADMIN');
+    const hasAnyPerm = (candidates: string[]) =>
+      isSuperAdmin ||
+      candidates.some((c) => {
+        const low = c.toLowerCase();
+        if (permSet.has(low) || permSet.has('*')) return true;
+        const [domain, action] = low.split(':');
+        if (!domain) return false;
+        if (permSet.has(`${domain}:manage`)) return true;
+        if (action === 'read' || action === 'view') {
+          return permSet.has(`${domain}:read_list`) || permSet.has(`${domain}:read_detail`);
+        }
+        return false;
+      });
+
+    const openStaffReadKeys = new Set([
+      'generalSettings',
+      'tva',
+      'prefixes',
+      'printTemplates',
+      'printers',
+      'paymentMethods',
+      'translations',
+    ]);
+    if (!isWrite && openStaffReadKeys.has(key)) {
+      return { isRoot: false };
+    }
+
+    const permMap: Record<string, { read: string[]; write: string[] }> = {
+      carrierWebhooks: {
+        read: ['deliveries:read', 'orders:read', 'settings:read'],
+        write: [],
+      },
+      carrierLogs: {
+        read: ['deliveries:read', 'orders:read', 'settings:read'],
+        write: ['deliveries:update', 'orders:update', 'settings:update'],
+      },
+      purchaseOrders: {
+        read: ['purchases_orders:read', 'purchases_orders:create', 'purchases:read', 'settings:read'],
+        write: ['purchases_orders:create', 'purchases_orders:update', 'purchases:update', 'settings:update'],
+      },
+      purchaseReceipts: {
+        read: ['purchases_receipts:read', 'purchases_receipts:create', 'purchases:read', 'settings:read'],
+        write: ['purchases_receipts:create', 'purchases_receipts:update', 'purchases:update', 'settings:update'],
+      },
+      stockIns: {
+        read: ['stock_in:read', 'inventory:read', 'settings:read'],
+        write: ['stock_in:create', 'stock_in:update', 'inventory:adjust', 'settings:update'],
+      },
+      stockOuts: {
+        read: ['stock_out:read', 'inventory:read', 'settings:read'],
+        write: ['stock_out:create', 'stock_out:update', 'inventory:adjust', 'settings:update'],
+      },
+      inventoryDocuments: {
+        read: ['inventory:read', 'settings:read'],
+        write: ['inventory:create', 'inventory:update', 'inventory:adjust', 'settings:update'],
+      },
+      deliverySlips: {
+        read: ['deliveries:read', 'orders:read', 'settings:read'],
+        write: ['deliveries:create', 'deliveries:update', 'orders:update', 'settings:update'],
+      },
+      invoicesList: {
+        read: ['invoices:read', 'orders:read', 'settings:read'],
+        write: ['invoices:create', 'invoices:update', 'orders:update', 'settings:update'],
+      },
+      customerReturns: {
+        read: ['returns:read', 'orders:read', 'settings:read'],
+        write: ['returns:create', 'returns:update', 'orders:update', 'settings:update'],
+      },
+      treasuryTransactions: {
+        read: ['treasury:read', 'accounting:read', 'settings:read'],
+        write: ['treasury:create', 'treasury:update', 'accounting:update', 'settings:update'],
+      },
+      treasuryPayments: {
+        read: ['treasury:read', 'accounting:read', 'settings:read'],
+        write: ['treasury:create', 'treasury:update', 'accounting:update', 'settings:update'],
+      },
+      treasuryAccounts: {
+        read: ['treasury:read', 'accounting:read', 'settings:read'],
+        write: ['treasury:create', 'treasury:update', 'accounting:update', 'settings:update'],
+      },
+      accountingEntries: {
+        read: ['accounting:read', 'treasury:read', 'settings:read'],
+        write: ['accounting:create', 'accounting:update', 'treasury:update', 'settings:update'],
+      },
+      paymentMethods: {
+        read: ['settings:read', 'treasury:read', 'pos:read'],
+        write: ['settings:update', 'treasury:update', 'pos:update'],
+      },
+      customersMeta: {
+        read: ['customers:read', 'users:read', 'settings:read'],
+        write: ['customers:update', 'users:update', 'settings:update'],
+      },
+      marketingPixels: {
+        read: ['coupons:read', 'analytics:read', 'settings:read'],
+        write: ['settings:update'],
+      },
+      generalSettings: { read: ['settings:read'], write: ['settings:update'] },
+      tva: { read: ['settings:read'], write: ['settings:update'] },
+      prefixes: { read: ['settings:read'], write: ['settings:update'] },
+      printTemplates: { read: ['settings:read'], write: ['settings:update'] },
+      translations: { read: ['settings:read', 'translations:read'], write: ['settings:update', 'translations:update'] },
+    };
+
+    const rule = permMap[key];
+    const required = rule ? (isWrite ? rule.write : rule.read) : [isWrite ? 'settings:update' : 'settings:read'];
+    if (!hasAnyPerm(required)) {
+      throw new ForbiddenException('Permissions insuffisantes pour accéder à cette configuration.');
+    }
+    return { isRoot: false };
+  }
+
+  async getSysConfigAuthorized(key: string, user: any) {
+    const { isRoot } = await this.assertSysConfigAccess(user, key, false);
+    const data = await this.getSysConfig(key);
+    if (key === 'carrierWebhooks' && !isRoot && Array.isArray(data?.value)) {
+      return {
+        ...data,
+        value: data.value.map((carrier: any) => ({
+          ...carrier,
+          webhookSecret: carrier?.webhookSecret ? '********' : '',
+          apiKey: carrier?.apiKey ? '********' : '',
+          secret: carrier?.secret ? '********' : '',
+        })),
+      };
+    }
+    return data;
   }
 
   async updateSysConfig(key: string, value: any, updatedBy?: string) {
@@ -6124,11 +6264,12 @@ export class StorefrontCmsService {
 
   async testSmtpConnection(dto: SmtpTestDto) {
     const cfg = (await this.getSysConfig('smtp')).value as any;
-    const host = dto.host || cfg.host;
+    const host = String(dto.host || cfg.host || '').trim();
     const port = Number(dto.port || cfg.port || 587);
     if (!host) {
       throw new BadRequestException('Serveur SMTP requis.');
     }
+    assertSafeExternalHost(host);
 
     return new Promise((resolve) => {
       const socket = net.createConnection({ host, port, timeout: 3000 });
@@ -6331,6 +6472,18 @@ export class StorefrontCmsService {
     successUrl?: string;
     failUrl?: string;
   }) {
+    const order = await this.prisma.order.findFirst({
+      where: { reference: dto.orderReference, isDeleted: false },
+      select: { id: true, reference: true, totalAmount: true },
+    });
+    if (!order) {
+      throw new NotFoundException('Commande introuvable pour le paiement Flouci.');
+    }
+    const authoritativeAmountTnd = Number(order.totalAmount || 0);
+    if (!Number.isFinite(authoritativeAmountTnd) || authoritativeAmountTnd <= 0) {
+      throw new BadRequestException('Montant de commande invalide pour Flouci.');
+    }
+
     const cfg: any = (await this.getSysConfig('paymentGateways')).value || {};
     const flouci = cfg.flouci || {};
     if (!flouci.enabled) {
@@ -6343,28 +6496,44 @@ export class StorefrontCmsService {
     }
 
     const frontendOrigin = (process.env.FRONTEND_URL || 'https://royal.com.tn').replace(/\/+$/, '');
+    const assertSafeRedirectUrl = (candidate: unknown, fallbackUrl: string) => {
+      const raw = String(candidate || '').trim();
+      if (!raw) return fallbackUrl;
+      if (raw.startsWith('/') && !raw.startsWith('//')) {
+        return `${frontendOrigin}${raw}`;
+      }
+      try {
+        const parsed = new URL(raw);
+        const allowed = new URL(frontendOrigin);
+        if (parsed.origin === allowed.origin) {
+          return parsed.toString();
+        }
+      } catch {
+        // reject malformed or cross-origin redirect URLs
+      }
+      throw new BadRequestException('URL de redirection Flouci invalide ou non autorisée.');
+    };
     const resolveFlouciUrl = (configuredUrl: unknown, defaultUrl: string) => {
       const raw = String(configuredUrl || '').trim();
       if (!raw) return defaultUrl;
-      const expanded = raw.replace(/\{orderReference\}|\{ref\}/gi, encodeURIComponent(dto.orderReference));
-      return /^https?:\/\//i.test(expanded)
-        ? expanded
-        : `${frontendOrigin}${expanded.startsWith('/') ? '' : '/'}${expanded}`;
+      const expanded = raw.replace(/\{orderReference\}|\{ref\}/gi, encodeURIComponent(order.reference));
+      return assertSafeRedirectUrl(expanded, defaultUrl);
     };
-    const defaultSuccess = `${frontendOrigin}/order-confirmation/${encodeURIComponent(dto.orderReference)}?paid=flouci`;
-    const defaultFail = `${frontendOrigin}/checkout?paymentError=flouci&ref=${encodeURIComponent(dto.orderReference)}`;
+    const proofToken = generateOrderProofToken(order.id, order.reference);
+    const defaultSuccess = `${frontendOrigin}/order-confirmation/${encodeURIComponent(order.reference)}?paid=flouci&token=${encodeURIComponent(proofToken)}`;
+    const defaultFail = `${frontendOrigin}/checkout?paymentError=flouci&ref=${encodeURIComponent(order.reference)}`;
     const cfgSuccess = String(flouci.successUrl || '').trim();
     const cfgFail = String(flouci.failUrl || '').trim();
-    const successLink =
-      dto.successUrl ||
-      (cfgSuccess && cfgSuccess !== '/order-confirmation'
+    const successLink = dto.successUrl
+      ? assertSafeRedirectUrl(dto.successUrl, defaultSuccess)
+      : cfgSuccess && cfgSuccess !== '/order-confirmation'
         ? resolveFlouciUrl(cfgSuccess, defaultSuccess)
-        : defaultSuccess);
-    const failLink =
-      dto.failUrl ||
-      (cfgFail && cfgFail !== '/checkout?paymentError=flouci'
+        : defaultSuccess;
+    const failLink = dto.failUrl
+      ? assertSafeRedirectUrl(dto.failUrl, defaultFail)
+      : cfgFail && cfgFail !== '/checkout?paymentError=flouci'
         ? resolveFlouciUrl(cfgFail, defaultFail)
-        : defaultFail);
+        : defaultFail;
 
     const res = await fetch('https://developers.flouci.com/api/generate_payment', {
       method: 'POST',
@@ -6372,12 +6541,12 @@ export class StorefrontCmsService {
       body: JSON.stringify({
         app_token: appToken,
         app_secret: appSecret,
-        amount: Math.max(100, Math.round(Number(dto.amountTnd || 0) * 1000)),
+        amount: Math.max(100, Math.round(authoritativeAmountTnd * 1000)),
         accept_card: 'true',
         session_timeout_secs: 1200,
         success_link: successLink,
         fail_link: failLink,
-        developer_tracking_id: dto.orderReference,
+        developer_tracking_id: order.reference,
       }),
     });
 
@@ -6615,6 +6784,30 @@ export class StorefrontCmsService {
       totalTnd: Number(order.totalAmount || 0),
     };
 
+    const locale = normalizeEmailLocale(dto.locale);
+    const frStatusMap: Record<string, string> = {
+      PENDING: 'En attente',
+      CONFIRMED: 'Confirmée',
+      PROCESSING: 'En préparation',
+      SHIPPED: 'Expédiée',
+      DELIVERED: 'Livrée',
+      CANCELLED: 'Annulée',
+      RETURNED: 'Retournée',
+    };
+    const arStatusMap: Record<string, string> = {
+      PENDING: 'قيد الانتظار',
+      CONFIRMED: 'مؤكدة',
+      PROCESSING: 'قيد التحضير',
+      SHIPPED: 'في طريق التوصيل',
+      DELIVERED: 'تم التوصيل',
+      CANCELLED: 'ملغاة',
+      RETURNED: 'مرتجعة',
+    };
+    const rawStatus = String(order.status || 'DELIVERED').toUpperCase();
+    const pdfStatusLabel = frStatusMap[rawStatus] || rawStatus;
+    const localizedStatusLabel =
+      locale === 'AR' ? arStatusMap[rawStatus] || rawStatus : pdfStatusLabel;
+
     const attachments: Array<{ filename: string; contentType: string; content: Buffer }> = [];
     const docLabels: string[] = [];
 
@@ -6627,9 +6820,10 @@ export class StorefrontCmsService {
           docTitle: 'FACTURE CLIENT',
           reference: invoiceRef,
           isDeliverySlip: false,
+          statusLabel: pdfStatusLabel,
         }),
       });
-      docLabels.push(`Facture (${invoiceRef})`);
+      docLabels.push(locale === 'AR' ? `فاتورة (${invoiceRef})` : `Facture (${invoiceRef})`);
     }
     if (sendDeliverySlip) {
       attachments.push({
@@ -6640,22 +6834,24 @@ export class StorefrontCmsService {
           docTitle: 'BON DE LIVRAISON (BL)',
           reference: deliveryRef,
           isDeliverySlip: true,
+          statusLabel: pdfStatusLabel,
         }),
       });
-      docLabels.push(`Bon de Livraison (${deliveryRef})`);
+      docLabels.push(
+        locale === 'AR' ? `وصل تسليم (${deliveryRef})` : `Bon de Livraison (${deliveryRef})`,
+      );
     }
 
-    const locale = normalizeEmailLocale(dto.locale);
     const rendered = await renderLocalizedEmail(this.prisma, {
       templateId: dto.templateId,
       templateKey: dto.templateKey || 'orders:status_update',
       locale,
       customSubject: dto.customSubject,
-      badgeText: locale === 'AR' ? 'تأكيد التوصيل' : 'Confirmation Livraison',
+      badgeText: locale === 'AR' ? 'مستجدات التوصيل' : 'Suivi Livraison',
       variables: {
         customerName,
         orderNumber: order.reference,
-        statusLabel: locale === 'AR' ? 'تم التوصيل' : 'Livrée',
+        statusLabel: localizedStatusLabel,
         totalAmount: `${commonOpts.totalTnd.toFixed(3)} TND`,
         documentsList: docLabels.join(' + '),
         customNote: dto.customNote || '',

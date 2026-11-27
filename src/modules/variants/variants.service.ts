@@ -8,18 +8,14 @@ import {
   CreateVariantFamilyDto,
   UpdateVariantFamilyDto,
 } from './dto/variant.dto';
+import { normalizeSystemCode } from '../../common/utils/security.util';
 
 @Injectable()
 export class VariantsService {
   constructor(private readonly prisma: PrismaService) {}
 
   private normalizeCode(input: string): string {
-    return input
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/(^_|_$)+/g, '');
+    return normalizeSystemCode(input);
   }
 
   private format(family: any) {

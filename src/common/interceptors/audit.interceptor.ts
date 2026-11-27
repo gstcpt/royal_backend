@@ -8,6 +8,7 @@ import { Observable, from } from 'rxjs';
 import { tap, switchMap } from 'rxjs/operators';
 import { Request } from 'express';
 import { AuditLogsService } from '../../modules/audit-logs/audit-logs.service';
+import { redactAuditSecrets } from '../utils/security.util';
 
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
@@ -67,10 +68,8 @@ export class AuditInterceptor implements NestInterceptor {
     const resourceId = isSpecialAction ? null : rawId || body?.id || null;
     const tableName = resourceSegment.toLowerCase();
 
-    // Sanitize body (strip passwords)
-    const sanitizedBody = body ? { ...body } : null;
-    if (sanitizedBody?.password) sanitizedBody.password = '[PROTECTED]';
-    if (sanitizedBody?.passwordHash) sanitizedBody.passwordHash = '[PROTECTED]';
+    // Deep-sanitize request payload (passwords, tokens, API secrets, credentials)
+    const sanitizedBody = body ? redactAuditSecrets(body) : null;
 
     const clientIp = (ip || headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1') as string;
     const userAgent = (headers['user-agent'] as string) || 'Royal-Client';
@@ -119,13 +118,14 @@ export class AuditInterceptor implements NestInterceptor {
                 return;
               }
               const rawAfter = resData?.data !== undefined ? resData.data : resData;
-              const afterData = compactAuditPayload(rawAfter);
+              const afterData = redactAuditSecrets(compactAuditPayload(rawAfter));
+              const safeBefore = redactAuditSecrets(beforeSnapshot);
               const diff = skipSnapshot
                 ? safeSanitizedBody
                   ? { payload: safeSanitizedBody }
                   : null
                 : this.auditLogsService.computeDiff(
-                    beforeSnapshot,
+                    safeBefore,
                     afterData || safeSanitizedBody,
                   );
 
@@ -160,7 +160,7 @@ export class AuditInterceptor implements NestInterceptor {
                 resourceId: resourceId || resData?.data?.id || resData?.id || null,
                 tableName,
                 description,
-                before: beforeSnapshot,
+                before: safeBefore,
                 after: afterData || safeSanitizedBody || null,
                 diffJson: diff,
                 ipAddress: clientIp,
@@ -168,6 +168,7 @@ export class AuditInterceptor implements NestInterceptor {
               });
             },
             error: (err) => {
+              const safeBefore = redactAuditSecrets(beforeSnapshot);
               void this.auditLogsService.recordLog({
                 actorId,
                 actorEmail,
@@ -179,7 +180,7 @@ export class AuditInterceptor implements NestInterceptor {
                 description: `Échec de l'opération [${method}] ${originalUrl} : ${
                   err?.message || 'Erreur non spécifiée'
                 }`,
-                before: beforeSnapshot,
+                before: safeBefore,
                 after: null,
                 diffJson: { error: err?.message || 'Erreur', payload: safeSanitizedBody },
                 ipAddress: clientIp,

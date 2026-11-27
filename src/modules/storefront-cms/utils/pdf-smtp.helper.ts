@@ -31,18 +31,21 @@ export interface DocumentPdfOptions {
   fiscalStampTnd: number;
   totalTnd: number;
   isDeliverySlip?: boolean;
+  statusLabel?: string;
 }
 
-function escapePdfText(input: string): string {
-  // Normalize French/Latin accents safely into clean ASCII-compatible WinAnsi or strip diacritics if needed
+function escapePdfText(input: string, fallback = ''): string {
+  // Normalize French/Latin accents safely into clean ASCII-compatible WinAnsi or strip non-Latin glyphs safely
   const clean = String(input || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^\x20-\x7E]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
     .replace(/\\/g, '\\\\')
     .replace(/\(/g, '\\(')
     .replace(/\)/g, '\\)');
-  return clean;
+  return clean || fallback;
 }
 
 /**
@@ -101,7 +104,7 @@ export function buildDocumentPdfBuffer(opts: DocumentPdfOptions): Buffer {
   let y = 594;
   const visibleItems = (opts.items || []).slice(0, 18);
   for (const item of visibleItems) {
-    text(46, y, 'F1', 9, item.label || 'Article', 46);
+    text(46, y, 'F1', 9, escapePdfText(item.label, item.sku || 'Article'), 46);
     text(338, y, 'F1', 9, String(item.quantity || 1), 6);
     if (!opts.isDeliverySlip) {
       text(390, y, 'F1', 9, `${Number(item.unitPrice || 0).toFixed(3)} TND`, 16);
@@ -143,7 +146,7 @@ export function buildDocumentPdfBuffer(opts: DocumentPdfOptions): Buffer {
   } else {
     const qtyTotal = opts.items.reduce((s, it) => s + Number(it.quantity || 1), 0);
     text(330, summaryY - 4, 'F2', 10, `Total Colis / Articles : ${qtyTotal}`, 34);
-    text(330, summaryY - 22, 'F1', 9, 'Statut : LIVRE ET RECEPTIONNE', 34);
+    text(330, summaryY - 22, 'F1', 9, `Statut : ${escapePdfText(opts.statusLabel || 'EN COURS', 'EN COURS')}`, 34);
   }
 
   // Footer
@@ -193,8 +196,12 @@ export interface SmtpAttachment {
   disposition?: 'attachment' | 'inline';
 }
 
+function cleanHeaderToken(input: string): string {
+  return String(input || '').replace(/[\r\n\0"<>]+/g, ' ').trim();
+}
+
 function encodeRfc2047(text: string): string {
-  return `=?UTF-8?B?${Buffer.from(text, 'utf8').toString('base64')}?=`;
+  return `=?UTF-8?B?${Buffer.from(String(text || '').replace(/[\r\n\0]+/g, ' '), 'utf8').toString('base64')}?=`;
 }
 
 function chunkBase64(buf: Buffer): string {
@@ -213,12 +220,14 @@ function buildHtmlPartLines(htmlBody: string): string[] {
 }
 
 function buildInlinePartLines(att: SmtpAttachment): string[] {
-  const cleanCid = String(att.cid || att.filename).replace(/^<|>$/g, '');
+  const cleanCid = cleanHeaderToken(att.cid || att.filename).replace(/^<|>$/g, '');
+  const safeName = cleanHeaderToken(att.filename) || 'inline.bin';
+  const safeType = cleanHeaderToken(att.contentType) || 'application/octet-stream';
   return [
-    `Content-Type: ${att.contentType}; name="${att.filename}"`,
+    `Content-Type: ${safeType}; name="${safeName}"`,
     'Content-Transfer-Encoding: base64',
     `Content-ID: <${cleanCid}>`,
-    `Content-Disposition: inline; filename="${att.filename}"`,
+    `Content-Disposition: inline; filename="${safeName}"`,
     '',
     chunkBase64(att.content),
     '',
@@ -243,8 +252,9 @@ export async function sendSmtpMailWithAttachments(
   const port = Number(cfg.port || 587);
   const user = String(cfg.user || '').trim();
   const password = String(cfg.password || '');
-  const fromEmail = String(cfg.fromEmail || user || 'noreply@royal.com.tn').trim();
+  const fromEmail = cleanHeaderToken(cfg.fromEmail || user || 'noreply@royal.com.tn');
   const fromName = String(cfg.fromName || 'Royal Electro de Maison').trim();
+  const toEmail = cleanHeaderToken(mail.to);
 
   if (!host || !user || !password) {
     throw new Error('Paramètres SMTP incomplets (hôte, utilisateur ou mot de passe manquant dans /dashboard/root/smtp).');
@@ -264,7 +274,7 @@ export async function sendSmtpMailWithAttachments(
 
   const lines: string[] = [
     `From: ${encodeRfc2047(fromName)} <${fromEmail}>`,
-    `To: <${mail.to}>`,
+    `To: <${toEmail}>`,
     `Subject: ${encodeRfc2047(mail.subject)}`,
     'MIME-Version: 1.0',
   ];
@@ -297,10 +307,12 @@ export async function sendSmtpMailWithAttachments(
 
   if (fileAtts.length > 0) {
     for (const att of fileAtts) {
+      const safeName = cleanHeaderToken(att.filename) || 'document.pdf';
+      const safeType = cleanHeaderToken(att.contentType) || 'application/octet-stream';
       lines.push(`--${mixedBoundary}`);
-      lines.push(`Content-Type: ${att.contentType}; name="${att.filename}"`);
+      lines.push(`Content-Type: ${safeType}; name="${safeName}"`);
       lines.push('Content-Transfer-Encoding: base64');
-      lines.push(`Content-Disposition: attachment; filename="${att.filename}"`);
+      lines.push(`Content-Disposition: attachment; filename="${safeName}"`);
       lines.push('');
       lines.push(chunkBase64(att.content));
       lines.push('');
@@ -312,11 +324,12 @@ export async function sendSmtpMailWithAttachments(
 
   // Escape any leading dots per RFC 5321 Section 4.5.2
   const rawMime = lines.join('\r\n').replace(/^\./gm, '..') + '\r\n.\r\n';
+  const allowSelfSigned = process.env.SMTP_ALLOW_SELF_SIGNED === 'true';
 
   return new Promise((resolve, reject) => {
     const useImplicitTls = port === 465 || cfg.secure === true;
     let socket: net.Socket | tls.TLSSocket = useImplicitTls
-      ? tls.connect({ host, port, rejectUnauthorized: false })
+      ? tls.connect({ host, port, rejectUnauthorized: !allowSelfSigned })
       : net.createConnection({ host, port });
 
     let buffer = '';
@@ -372,7 +385,7 @@ export async function sendSmtpMailWithAttachments(
             }
           } else if (step === 'STARTTLS' && code === 220) {
             buffer = '';
-            const upgraded = tls.connect({ socket: sock, servername: host, rejectUnauthorized: false });
+            const upgraded = tls.connect({ socket: sock, servername: host, rejectUnauthorized: !allowSelfSigned });
             upgraded.on('error', (err) => finishErr(new Error(`Erreur STARTTLS : ${err.message}`)));
             upgraded.on('timeout', () => finishErr(new Error('Délai STARTTLS expiré.')));
             upgraded.on('secureConnect', () => {

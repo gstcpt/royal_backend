@@ -66,8 +66,11 @@ export class AuditLogsController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Enregistrement programmatique d’un événement d’audit' })
-  async recordLog(@Body() dto: CreateAuditLogDto) {
+  @ApiOperation({ summary: 'Enregistrement programmatique d’un événement d’audit (ROOT ONLY)' })
+  async recordLog(@Body() dto: CreateAuditLogDto, @CurrentUser() user: any) {
+    if (!user?.roles?.includes(SystemRole.ROOT)) {
+      throw new ForbiddenException('Enregistrement direct d’audit strictement réservé au compte ROOT');
+    }
     return this.auditLogsService.recordLog(dto);
   }
 

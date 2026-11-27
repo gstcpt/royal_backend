@@ -272,11 +272,12 @@ export class CartService {
   }
 
   async updateItem(itemId: string, dto: UpdateCartItemDto, sessionId?: string, customerId?: string) {
+    const cart = await this.getOrCreateCart(sessionId, customerId);
     const item = await this.prisma.cartItem.findUnique({
       where: { id: itemId },
     });
 
-    if (!item) {
+    if (!item || item.cartId !== cart.id) {
       throw new NotFoundException('Article de panier introuvable.');
     }
 
@@ -289,11 +290,12 @@ export class CartService {
   }
 
   async removeItem(itemId: string, sessionId?: string, customerId?: string) {
+    const cart = await this.getOrCreateCart(sessionId, customerId);
     const item = await this.prisma.cartItem.findUnique({
       where: { id: itemId },
     });
 
-    if (item) {
+    if (item && item.cartId === cart.id) {
       await this.prisma.cartItem.delete({
         where: { id: itemId },
       });

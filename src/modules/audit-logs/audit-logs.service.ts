@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { CreateAuditLogDto } from './dto/create-audit-log.dto';
 import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
+import { redactAuditSecrets } from '../../common/utils/security.util';
 
 @Injectable()
 export class AuditLogsService {
@@ -48,10 +49,7 @@ export class AuditLogsService {
         where: { id },
       });
       if (record) {
-        const copy = { ...record };
-        delete copy.password;
-        delete copy.passwordHash;
-        return copy;
+        return redactAuditSecrets(record);
       }
     } catch {
       return null;

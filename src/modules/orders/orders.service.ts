@@ -1,13 +1,19 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { CouponsService } from '../coupons/coupons.service';
 import { DeliveriesService } from '../deliveries/deliveries.service';
 import { allocateSystemDocumentReference } from '../deliveries/delivery-pricing.helper';
+import {
+  generateOrderProofToken,
+  verifyOrderProofToken,
+} from '../../common/utils/security.util';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { OrderChannel, OrderStatus, PaymentMethod } from '@royal/shared-types';
@@ -272,6 +278,7 @@ export class OrdersService {
               reference,
               userId || 'GUEST',
               false,
+              tx,
             );
           } else {
             const missingQty = item.quantity - localQty;
@@ -284,6 +291,7 @@ export class OrdersService {
                 reference,
                 userId || 'GUEST',
                 false,
+                tx,
               );
             }
 
@@ -333,15 +341,17 @@ export class OrdersService {
                 where: { id: item.variantId },
                 include: { product: { select: { dimensionsJson: true } } },
               });
-              const metaQty = Number((variantRec?.product?.dimensionsJson as any)?.stockQuantity ?? 20);
-              await tx.stock.create({
-                data: {
-                  variantId: item.variantId,
-                  warehouseId: warehouse.id,
-                  physicalQty: metaQty > 0 ? metaQty : 20,
-                  reservedQty: 0,
-                },
-              });
+              const metaQty = Number((variantRec?.product?.dimensionsJson as any)?.stockQuantity ?? 0);
+              if (metaQty >= item.quantity) {
+                await tx.stock.create({
+                  data: {
+                    variantId: item.variantId,
+                    warehouseId: warehouse.id,
+                    physicalQty: metaQty,
+                    reservedQty: 0,
+                  },
+                });
+              }
             }
           }
           await this.inventoryService.deductStock(
@@ -352,6 +362,7 @@ export class OrdersService {
             reference,
             userId || 'GUEST',
             false,
+            tx,
           );
         }
       }
@@ -545,7 +556,10 @@ export class OrdersService {
       };
     });
 
-    return createdOrder;
+    return {
+      ...createdOrder,
+      confirmationToken: generateOrderProofToken(createdOrder.id, createdOrder.reference),
+    };
   }
 
   async findMyOrders(userId: string, query: QueryOrdersDto) {
@@ -569,13 +583,12 @@ export class OrdersService {
     }
 
     if (customerId) {
-      const res = await this.findAll({ ...query, customerId });
-      if ((res?.data || []).length > 0) {
-        return res;
-      }
+      return this.findAll({ ...query, customerId });
     }
 
-    return this.findAll(query);
+    const page = query.page ? Number(query.page) : 1;
+    const limit = query.limit ? Number(query.limit) : 20;
+    return { data: [], meta: { page, limit, total: 0, totalPages: 0 } };
   }
 
   async findAll(query: QueryOrdersDto) {
@@ -656,16 +669,32 @@ export class OrdersService {
     };
   }
 
-  async findOne(idOrReference: string) {
+  private maskContactEmail(raw?: string | null): string | null {
+    const val = String(raw || '').trim();
+    const at = val.indexOf('@');
+    if (at <= 1) return val ? '***' : null;
+    return `${val[0]}***${val.slice(at)}`;
+  }
+
+  private maskContactPhone(raw?: string | null): string | null {
+    const val = String(raw || '').trim();
+    if (!val) return null;
+    return val.length <= 4 ? '***' : `***${val.slice(-4)}`;
+  }
+
+  async findOne(
+    idOrReference: string,
+    accessContext?: { user?: any; proofToken?: string },
+  ) {
     const order = await this.prisma.order.findFirst({
       where: {
         OR: [{ id: idOrReference }, { reference: idOrReference }],
       },
       include: {
-        customer: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+        customer: { select: { id: true, userId: true, firstName: true, lastName: true, email: true, phone: true } },
         items: {
           include: {
-            product: { select: { id: true, name: true, slug: true } },
+            product: { select: { id: true, name: true, nameAr: true, slug: true } },
             variant: { select: { id: true, sku: true, name: true } },
           },
         },
@@ -688,7 +717,73 @@ export class OrdersService {
       throw new NotFoundException(`Commande introuvable : ${idOrReference}`);
     }
 
-    return order;
+    if (!accessContext) {
+      return order;
+    }
+
+    const user = accessContext.user;
+    const roles: string[] = Array.isArray(user?.roles) ? user.roles : [];
+    const isStaff = roles.some((r) => r && r !== 'CLIENT');
+    if (isStaff) {
+      return order;
+    }
+
+    const userEmail = String(user?.email || '').trim().toLowerCase();
+    const isOwner = Boolean(
+      user &&
+        ((order.customer?.userId && order.customer.userId === user.id) ||
+          (userEmail && order.customer?.email?.toLowerCase() === userEmail) ||
+          (userEmail && order.guestEmail?.toLowerCase() === userEmail)),
+    );
+    if (isOwner) {
+      return order;
+    }
+
+    if (verifyOrderProofToken(order.id, order.reference, accessContext.proofToken)) {
+      return {
+        id: order.id,
+        reference: order.reference,
+        status: order.status,
+        channel: order.channel,
+        fulfillmentType: order.fulfillmentType,
+        deliveryMethodId: order.deliveryMethodId,
+        paymentMethod: order.payments?.[0]?.method || null,
+        subtotalAmount: order.subtotalAmount,
+        discountAmount: order.discountAmount,
+        shippingAmount: order.shippingAmount,
+        taxAmount: order.taxAmount,
+        totalAmount: order.totalAmount,
+        couponCode: order.couponCode,
+        createdAt: order.createdAt,
+        guestName: order.guestName,
+        guestEmail: this.maskContactEmail(order.guestEmail || order.customer?.email),
+        guestPhone: this.maskContactPhone(order.guestPhone || order.customer?.phone),
+        deliveryCompany: order.deliveryCompany,
+        pickupShowroom: order.pickupShowroom
+          ? { id: order.pickupShowroom.id, name: order.pickupShowroom.name, code: order.pickupShowroom.code, address: order.pickupShowroom.address }
+          : null,
+        items: order.items,
+        statusHistory: order.statusHistory.map((h) => ({
+          id: h.id,
+          fromStatus: h.fromStatus,
+          toStatus: h.toStatus,
+          createdAt: h.createdAt,
+        })),
+        payments: (order.payments || []).map((p) => ({
+          id: p.id,
+          amount: p.amount,
+          currency: p.currency,
+          method: p.method,
+          status: p.status,
+        })),
+        confirmationToken: generateOrderProofToken(order.id, order.reference),
+      };
+    }
+
+    if (!user) {
+      throw new UnauthorizedException('Authentification ou jeton de confirmation requis pour consulter cette commande.');
+    }
+    throw new ForbiddenException('Vous n’êtes pas autorisé à consulter cette commande.');
   }
 
   async updateStatus(id: string, newStatus: OrderStatus, changedBy: string, comment?: string) {
@@ -753,6 +848,7 @@ export class OrdersService {
                   reason: `Rétablissement stock suite annulation commande ${order.reference}`,
                 },
                 changedBy,
+                tx,
               );
             }
           }
@@ -813,22 +909,39 @@ export class OrdersService {
     });
   }
 
-  async trackGuestOrder(reference: string, emailOrPhone: string) {
-    const cleanRef = reference.trim().toUpperCase();
-    const cleanContact = emailOrPhone.trim().toLowerCase();
+  async trackGuestOrder(reference?: string, emailOrPhone?: string) {
+    const cleanRef = String(reference || '').trim().toUpperCase();
+    const cleanContact = String(emailOrPhone || '').trim().toLowerCase();
+    if (!cleanRef || cleanContact.length < 4) {
+      throw new BadRequestException('Référence de commande et contact (e-mail ou téléphone d’au moins 4 caractères) requis.');
+    }
+
+    const digits = cleanContact.replace(/\D+/g, '');
+    const contactFilters: any[] = [
+      { guestEmail: { equals: cleanContact, mode: 'insensitive' } },
+      { customer: { email: { equals: cleanContact, mode: 'insensitive' } } },
+    ];
+    if (digits.length >= 6) {
+      contactFilters.push(
+        { guestPhone: { endsWith: digits.slice(-8) } },
+        { customer: { phone: { endsWith: digits.slice(-8) } } },
+      );
+    }
 
     const order = await this.prisma.order.findFirst({
       where: {
         reference: cleanRef,
-        OR: [
-          { guestEmail: { equals: cleanContact, mode: 'insensitive' } },
-          { guestPhone: { contains: cleanContact } },
-        ],
+        isDeleted: false,
+        OR: contactFilters,
       },
       include: {
         items: true,
         statusHistory: { orderBy: { createdAt: 'desc' } },
-        payments: true,
+        payments: {
+          select: { id: true, amount: true, currency: true, method: true, status: true },
+        },
+        deliveryCompany: { select: { id: true, name: true, code: true } },
+        pickupShowroom: { select: { id: true, name: true, code: true, address: true } },
       },
     });
 
@@ -836,7 +949,12 @@ export class OrdersService {
       throw new NotFoundException('Aucune commande correspondante trouvée.');
     }
 
-    return order;
+    return {
+      ...order,
+      guestEmail: this.maskContactEmail(order.guestEmail),
+      guestPhone: this.maskContactPhone(order.guestPhone),
+      confirmationToken: generateOrderProofToken(order.id, order.reference),
+    };
   }
 
   async bulkAction(

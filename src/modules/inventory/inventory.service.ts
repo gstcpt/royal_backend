@@ -7,7 +7,7 @@ import { PrismaService } from '../../database/prisma.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { ReserveStockDto } from './dto/reserve-stock.dto';
 import { QueryStockDto } from './dto/query-stock.dto';
-import { StockMovementType } from '@prisma/client';
+import { Prisma, StockMovementType } from '@prisma/client';
 
 @Injectable()
 export class InventoryService {
@@ -163,8 +163,8 @@ export class InventoryService {
       }));
   }
 
-  async adjustStock(dto: AdjustStockDto, userId: string) {
-    return this.prisma.$transaction(async (tx) => {
+  async adjustStock(dto: AdjustStockDto, userId: string, txClient?: Prisma.TransactionClient) {
+    const run = async (tx: Prisma.TransactionClient) => {
       // Find or create the stock record for this variant & warehouse
       let stock = await tx.stock.findUnique({
         where: {
@@ -219,7 +219,8 @@ export class InventoryService {
           variant: { select: { sku: true, name: true } },
         },
       });
-    });
+    };
+    return txClient ? run(txClient) : this.prisma.$transaction(run);
   }
 
   async reserveStock(dto: ReserveStockDto, userId: string) {
@@ -323,8 +324,9 @@ export class InventoryService {
     referenceId: string,
     userId: string,
     fromReserved: boolean = false,
+    txClient?: Prisma.TransactionClient,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    const run = async (tx: Prisma.TransactionClient) => {
       const stock = await tx.stock.findUnique({
         where: {
           variantId_warehouseId: {
@@ -375,7 +377,8 @@ export class InventoryService {
           reservedQty: reservedAfter,
         },
       });
-    });
+    };
+    return txClient ? run(txClient) : this.prisma.$transaction(run);
   }
 
   async findMovements(query: {

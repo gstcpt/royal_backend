@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
@@ -26,6 +27,7 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Public()
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post()
   @ApiOperation({ summary: 'Passer une nouvelle commande (Client ou Invité)' })
   @ApiResponse({ status: 201, description: 'Commande validée avec snapshot immuable et référence' })
@@ -35,6 +37,7 @@ export class OrdersController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 25, ttl: 60000 } })
   @Get('track')
   @ApiOperation({ summary: 'Suivi de commande pour client invité (Référence + Contact)' })
   trackGuestOrder(
@@ -64,9 +67,14 @@ export class OrdersController {
 
   @Public()
   @Get(':id')
-  @ApiOperation({ summary: 'Détails complets d’une commande avec historique des statuts' })
-  findOne(@Param('id') id: string) {
-    return this.ordersService.findOne(id);
+  @ApiOperation({ summary: 'Détails complets d’une commande avec contrôle d’accès client/invité/staff' })
+  findOne(
+    @Param('id') id: string,
+    @Query('token') token?: string,
+    @Req() req?: any,
+  ) {
+    const proofToken = token || (req?.headers?.['x-order-token'] as string | undefined);
+    return this.ordersService.findOne(id, { user: req?.user, proofToken });
   }
 
   @Patch(':id/status')

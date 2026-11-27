@@ -27,7 +27,7 @@ export class StockTransfersController {
   constructor(private readonly transfersService: StockTransfersService) {}
 
   @Get()
-  @Permissions('transfers:view', 'inventory:view')
+  @Permissions('transfers:view|inventory:view')
   @ApiOperation({ summary: 'Lister les transferts inter-entrepôts' })
   @ApiQuery({ name: 'status', enum: StockTransferStatus, required: false })
   @ApiResponse({ status: 200, description: 'Liste des transferts' })
@@ -36,7 +36,7 @@ export class StockTransfersController {
   }
 
   @Get(':id')
-  @Permissions('transfers:view', 'inventory:view')
+  @Permissions('transfers:view|inventory:view')
   @ApiOperation({ summary: 'Consulter un transfert détaillé avec ses lignes' })
   @ApiResponse({ status: 200, description: 'Détails du transfert' })
   findOne(@Param('id') id: string) {
@@ -44,7 +44,7 @@ export class StockTransfersController {
   }
 
   @Post()
-  @Permissions('transfers:create', 'inventory:manage')
+  @Permissions('transfers:create|transfers:manage|inventory:manage')
   @ApiOperation({ summary: 'Initier une demande de transfert inter-dépôts' })
   @ApiResponse({ status: 201, description: 'Transfert créé au statut PENDING' })
   create(@Body() dto: CreateStockTransferDto, @Req() req: any) {
@@ -54,7 +54,7 @@ export class StockTransfersController {
 
   @Post(':id/accept')
   @Roles(SystemRole.ROOT, SystemRole.SUPER_ADMIN, SystemRole.WEBSITE_MANAGER)
-  @Permissions('transfers:approve', 'inventory:manage')
+  @Permissions('transfers:approve|transfers:update|inventory:manage')
   @ApiOperation({ summary: 'Accepter une demande de transfert (Exécution immédiate OUT+IN ou Suivi par étapes)' })
   @ApiResponse({ status: 200, description: 'Demande acceptée et bon de transfert TRF généré' })
   accept(
@@ -68,7 +68,7 @@ export class StockTransfersController {
 
   @Post(':id/approve')
   @Roles(SystemRole.ROOT, SystemRole.SUPER_ADMIN, SystemRole.WEBSITE_MANAGER)
-  @Permissions('transfers:approve', 'inventory:manage')
+  @Permissions('transfers:approve|transfers:update|inventory:manage')
   @ApiOperation({ summary: 'Approuver une demande de transfert (mode par étapes)' })
   @ApiResponse({ status: 200, description: 'Transfert approuvé' })
   approve(@Param('id') id: string, @Req() req: any) {
@@ -77,7 +77,7 @@ export class StockTransfersController {
   }
 
   @Post(':id/dispatch')
-  @Permissions('transfers:dispatch', 'inventory:manage')
+  @Permissions('transfers:dispatch|transfers:update|inventory:manage')
   @ApiOperation({ summary: 'Expédier le transfert (décrémente le stock d’origine et passe en transit)' })
   @ApiResponse({ status: 200, description: 'Transfert expédié' })
   dispatch(@Param('id') id: string, @Req() req: any) {
@@ -86,7 +86,7 @@ export class StockTransfersController {
   }
 
   @Post(':id/receive')
-  @Permissions('transfers:receive', 'inventory:manage')
+  @Permissions('transfers:receive|transfers:update|inventory:manage')
   @ApiOperation({ summary: 'Réceptionner le transfert (incrémente le stock de destination et clôture)' })
   @ApiResponse({ status: 200, description: 'Transfert réceptionné' })
   receive(@Param('id') id: string, @Req() req: any) {
@@ -95,7 +95,7 @@ export class StockTransfersController {
   }
 
   @Post(':id/cancel')
-  @Permissions('transfers:cancel', 'inventory:manage')
+  @Permissions('transfers:cancel|transfers:update|inventory:manage')
   @ApiOperation({ summary: 'Annuler un transfert' })
   @ApiResponse({ status: 200, description: 'Transfert annulé' })
   cancel(@Param('id') id: string, @Req() req: any) {

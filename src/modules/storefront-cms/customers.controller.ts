@@ -13,11 +13,14 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 import { StorefrontCmsService } from './storefront-cms.service';
 
 @ApiTags('Clients CRM')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('customers')
 export class CustomersController {
   constructor(private readonly service: StorefrontCmsService) {}
@@ -30,6 +33,7 @@ export class CustomersController {
   }
 
   @Get()
+  @Permissions('customers:read|orders:read|pos:view')
   @ApiOperation({ summary: 'Lister les fiches clients PostgreSQL avec agrégats commandes' })
   findAll(
     @Req() req: any,
@@ -44,6 +48,7 @@ export class CustomersController {
   }
 
   @Post()
+  @Permissions('customers:create|pos:operate')
   @ApiOperation({ summary: 'Créer un client B2C ou B2B en base PostgreSQL' })
   create(@Req() req: any, @Body() body: any) {
     this.ensureStaff(req);
@@ -51,6 +56,7 @@ export class CustomersController {
   }
 
   @Patch(':id')
+  @Permissions('customers:update')
   @ApiOperation({ summary: 'Mettre à jour un client B2C ou B2B' })
   update(@Req() req: any, @Param('id') id: string, @Body() body: any) {
     this.ensureStaff(req);
@@ -58,6 +64,7 @@ export class CustomersController {
   }
 
   @Delete(':id')
+  @Permissions('customers:delete')
   @ApiOperation({ summary: 'Archiver une fiche client' })
   remove(@Req() req: any, @Param('id') id: string) {
     this.ensureStaff(req);

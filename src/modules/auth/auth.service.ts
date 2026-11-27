@@ -21,6 +21,7 @@ import {
   sendLoggedSmtpEmail,
 } from '../storefront-cms/utils/email-template.helper';
 import { invalidateSessionCache, invalidateUserSessionCache } from './strategies/jwt.strategy';
+import { getJwtAccessSecret } from '../../common/utils/security.util';
 
 @Injectable()
 export class AuthService {
@@ -248,9 +249,7 @@ export class AuthService {
 
     const accessToken = await this.jwtService.signAsync(jwtPayload, {
       expiresIn: '15m',
-      secret:
-        this.configService.get<string>('JWT_ACCESS_SECRET') ||
-        'royal_jwt_super_access_secret_key_dev_2026!',
+      secret: getJwtAccessSecret(this.configService),
     });
 
     return {
@@ -272,16 +271,17 @@ export class AuthService {
     };
   }
 
-  private async sendVerificationEmail(email: string, firstName: string, code: string) {
+  private async sendVerificationEmail(email: string, firstName: string, code: string, locale: 'FR' | 'AR' = 'FR') {
     try {
+      const isAr = locale === 'AR';
       const rendered = await renderLocalizedEmail(this.prisma, {
         templateKey: 'auth:verify_email',
-        locale: 'FR',
-        badgeText: 'Vérification Compte',
+        locale,
+        badgeText: isAr ? 'تأكيد الحساب' : 'Vérification Compte',
         variables: {
-          firstName: firstName || 'Client',
+          firstName: firstName || (isAr ? 'حريفنا' : 'Client'),
           otpCode: code,
-          expireTime: '15 minutes',
+          expireTime: isAr ? '15 دقيقة' : '15 minutes',
         },
       });
       if (!rendered.identity.smtpCfg?.host || !rendered.identity.smtpCfg?.user || !rendered.identity.smtpCfg?.password) {
@@ -307,14 +307,15 @@ export class AuthService {
     }
   }
 
-  async sendWelcomeEmail(email: string, firstName: string, lastName: string) {
+  async sendWelcomeEmail(email: string, firstName: string, lastName: string, locale: 'FR' | 'AR' = 'FR') {
     try {
+      const isAr = locale === 'AR';
       const rendered = await renderLocalizedEmail(this.prisma, {
         templateKey: 'auth:welcome',
-        locale: 'FR',
-        badgeText: 'Bienvenue',
+        locale,
+        badgeText: isAr ? 'مرحباً بكم' : 'Bienvenue',
         variables: {
-          firstName: firstName || 'Client',
+          firstName: firstName || (isAr ? 'حريفنا' : 'Client'),
           lastName: lastName || '',
           email,
         },
@@ -332,19 +333,20 @@ export class AuthService {
     }
   }
 
-  async requestPasswordResetEmail(emailRaw: string) {
+  async requestPasswordResetEmail(emailRaw: string, locale: 'FR' | 'AR' = 'FR') {
     const email = String(emailRaw || '').trim().toLowerCase();
+    const isAr = locale === 'AR';
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (user && !user.deletedAt && user.isActive) {
       try {
         const rendered = await renderLocalizedEmail(this.prisma, {
           templateKey: 'auth:forgot_password',
-          locale: 'FR',
-          badgeText: 'Assistance Connexion',
+          locale,
+          badgeText: isAr ? 'مساعدة الدخول' : 'Assistance Connexion',
           variables: {
-            firstName: user.firstName || 'Client',
+            firstName: user.firstName || (isAr ? 'حريفنا' : 'Client'),
             email: user.email,
-            expireTime: '15 minutes',
+            expireTime: isAr ? '15 دقيقة' : '15 minutes',
           },
         });
         if (rendered.identity.smtpCfg?.host && rendered.identity.smtpCfg?.user && rendered.identity.smtpCfg?.password) {
@@ -369,7 +371,7 @@ export class AuthService {
   /**
    * Register a new client user with mandatory email verification (no auto-login)
    */
-  async register(registerDto: RegisterDto, metadata?: { ipAddress?: string; userAgent?: string }) {
+  async register(registerDto: RegisterDto, metadata?: { ipAddress?: string; userAgent?: string; locale?: 'FR' | 'AR' }) {
     const email = registerDto.email.trim().toLowerCase();
 
     const existingUser = await this.prisma.user.findUnique({
@@ -466,7 +468,7 @@ export class AuthService {
       }
     }
 
-    const delivery = await this.sendVerificationEmail(email, targetUser.firstName, otpCode);
+    const delivery = await this.sendVerificationEmail(email, targetUser.firstName, otpCode, metadata?.locale || 'FR');
     if (!delivery.sent) {
       if (!existingUser) {
         if (createdCustomerId) {
@@ -497,7 +499,7 @@ export class AuthService {
   async verifyEmailCode(
     emailRaw: string,
     codeRaw: string,
-    metadata?: { deviceInfo?: string; ipAddress?: string; userAgent?: string },
+    metadata?: { deviceInfo?: string; ipAddress?: string; userAgent?: string; locale?: 'FR' | 'AR' },
   ) {
     const email = String(emailRaw || '').trim().toLowerCase();
     const code = String(codeRaw || '').trim();
@@ -524,12 +526,12 @@ export class AuthService {
       },
     });
 
-    void this.sendWelcomeEmail(verifiedUser.email, verifiedUser.firstName, verifiedUser.lastName);
+    void this.sendWelcomeEmail(verifiedUser.email, verifiedUser.firstName, verifiedUser.lastName, metadata?.locale || 'FR');
 
     return this.login(verifiedUser, metadata);
   }
 
-  async resendVerificationCode(emailRaw: string) {
+  async resendVerificationCode(emailRaw: string, locale: 'FR' | 'AR' = 'FR') {
     const email = String(emailRaw || '').trim().toLowerCase();
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.deletedAt) {
@@ -551,7 +553,7 @@ export class AuthService {
       },
     });
 
-    const delivery = await this.sendVerificationEmail(email, user.firstName, otpCode);
+    const delivery = await this.sendVerificationEmail(email, user.firstName, otpCode, locale);
     if (!delivery.sent) {
       throw new BadRequestException(
         `Échec d'envoi du code vers ${email} (${delivery.reason}).`,
@@ -666,9 +668,7 @@ export class AuthService {
       },
       {
         expiresIn: '15m',
-        secret:
-          this.configService.get<string>('JWT_ACCESS_SECRET') ||
-          'royal_jwt_super_access_secret_key_dev_2026!',
+        secret: getJwtAccessSecret(this.configService),
       },
     );
 

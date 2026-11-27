@@ -26,7 +26,7 @@ export class WarehousesController {
   constructor(private readonly warehousesService: WarehousesService) {}
 
   @Get()
-  @Permissions('inventory:view', 'warehouses:view')
+  @Permissions('inventory:view|warehouses:view')
   @ApiOperation({ summary: 'Lister tous les entrepôts et dépôts' })
   @ApiQuery({ name: 'activeOnly', required: false, type: Boolean })
   @ApiResponse({ status: 200, description: 'Liste des entrepôts retournée avec succès' })
@@ -35,7 +35,7 @@ export class WarehousesController {
   }
 
   @Get(':id')
-  @Permissions('inventory:view', 'warehouses:view')
+  @Permissions('inventory:view|warehouses:view')
   @ApiOperation({ summary: 'Obtenir les détails d’un entrepôt avec ses stocks' })
   @ApiResponse({ status: 200, description: 'Détails de l’entrepôt retournés' })
   findOne(@Param('id') id: string) {
@@ -43,7 +43,7 @@ export class WarehousesController {
   }
 
   @Post()
-  @Permissions('warehouses:create', 'inventory:manage')
+  @Permissions('warehouses:create|inventory:manage')
   @ApiOperation({ summary: 'Créer un nouvel entrepôt' })
   @ApiResponse({ status: 201, description: 'Entrepôt créé avec succès' })
   create(@Body() dto: CreateWarehouseDto) {
@@ -51,7 +51,7 @@ export class WarehousesController {
   }
 
   @Put(':id')
-  @Permissions('warehouses:update', 'inventory:manage')
+  @Permissions('warehouses:update|inventory:manage')
   @ApiOperation({ summary: 'Mettre à jour un entrepôt existant (complet)' })
   @ApiResponse({ status: 200, description: 'Entrepôt mis à jour' })
   update(@Param('id') id: string, @Body() dto: UpdateWarehouseDto) {
@@ -59,7 +59,7 @@ export class WarehousesController {
   }
 
   @Patch(':id')
-  @Permissions('warehouses:update', 'inventory:manage')
+  @Permissions('warehouses:update|inventory:manage')
   @ApiOperation({ summary: 'Mettre à jour un entrepôt (partiel / statut)' })
   @ApiResponse({ status: 200, description: 'Entrepôt mis à jour' })
   patch(@Param('id') id: string, @Body() dto: UpdateWarehouseDto) {
@@ -67,7 +67,7 @@ export class WarehousesController {
   }
 
   @Delete(':id')
-  @Permissions('warehouses:delete', 'inventory:manage')
+  @Permissions('warehouses:delete|inventory:manage')
   @ApiOperation({ summary: 'Supprimer ou désactiver un entrepôt' })
   @ApiResponse({ status: 200, description: 'Entrepôt supprimé ou désactivé' })
   remove(@Param('id') id: string) {

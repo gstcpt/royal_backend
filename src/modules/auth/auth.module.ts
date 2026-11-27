@@ -6,6 +6,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PrismaModule } from '../../database/prisma.module';
+import { getJwtAccessSecret } from '../../common/utils/security.util';
 
 @Module({
   imports: [
@@ -15,9 +16,7 @@ import { PrismaModule } from '../../database/prisma.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        secret:
-          config.get<string>('JWT_ACCESS_SECRET') ||
-          'royal_jwt_super_access_secret_key_dev_2026!',
+        secret: getJwtAccessSecret(config),
         signOptions: {
           expiresIn: '15m',
         },

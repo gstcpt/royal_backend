@@ -70,7 +70,7 @@ export class ProductsService {
         take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
-          category: { select: { id: true, name: true, slug: true } },
+          category: { select: { id: true, name: true, nameAr: true, slug: true } },
           brand: { select: { id: true, name: true, slug: true } },
           supplier: { select: { id: true, name: true, code: true } },
           images: {
@@ -130,7 +130,9 @@ export class ProductsService {
         nameAr: p.nameAr,
         slug: p.slug,
         shortDescription: p.shortDescription,
+        shortDescAr: p.shortDescAr,
         description: p.description,
+        descriptionAr: p.descriptionAr,
         basePrice: Number(p.basePrice),
         sellingPrice: Number(p.sellingPrice),
         discountPrice: p.discountPrice ? Number(p.discountPrice) : null,
@@ -349,7 +351,7 @@ export class ProductsService {
         take: limit,
         orderBy,
         include: {
-          category: { select: { id: true, name: true, slug: true } },
+          category: { select: { id: true, name: true, nameAr: true, slug: true } },
           brand: { select: { id: true, name: true, slug: true } },
           images: {
             orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }],
@@ -421,7 +423,9 @@ export class ProductsService {
         nameAr: p.nameAr,
         slug: p.slug,
         shortDescription: p.shortDescription,
+        shortDescAr: p.shortDescAr,
         description: p.description,
+        descriptionAr: p.descriptionAr,
         sellingPrice: Number(p.sellingPrice),
         discountPrice: p.discountPrice ? Number(p.discountPrice) : null,
         discountPercent,
@@ -601,7 +605,7 @@ export class ProductsService {
         deletedAt: null,
       },
       include: {
-        category: { select: { id: true, name: true, slug: true } },
+        category: { select: { id: true, name: true, nameAr: true, slug: true } },
         brand: { select: { id: true, name: true, slug: true, logoUrl: true } },
         images: {
           orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }],
@@ -666,14 +670,16 @@ export class ProductsService {
         nameAr: p.nameAr,
         slug: p.slug,
         shortDescription: p.shortDescription,
+        shortDescAr: p.shortDescAr,
         description: p.description,
+        descriptionAr: p.descriptionAr,
         sellingPrice: Number(p.sellingPrice),
         discountPrice: p.discountPrice ? Number(p.discountPrice) : null,
         taxRate: Number(p.taxRate),
         weight: p.weight ? Number(p.weight) : null,
         dimensions: p.dimensionsJson || null,
-        category: p.category?.name || 'Général',
-        brand: p.brand?.name || 'Royal Signature',
+        category: p.category ? { name: p.category.name, nameAr: p.category.nameAr } : null,
+        brand: { name: p.brand?.name || 'Royal' },
         primaryImage,
         inStock: totalStock > 0 || p.variants.length === 0,
         totalStock,
@@ -701,7 +707,7 @@ export class ProductsService {
         deletedAt: null,
       },
       include: {
-        category: { select: { id: true, name: true, slug: true } },
+        category: { select: { id: true, name: true, nameAr: true, slug: true } },
         brand: { select: { id: true, name: true, slug: true, logoUrl: true, description: true } },
         supplier: { select: { id: true, name: true } },
         images: {
@@ -774,20 +780,23 @@ export class ProductsService {
   /**
    * Find product by ID (admin detail)
    */
-  async findById(id: string) {
+  async findById(id: string, requestUser?: any) {
+    const roles: string[] = Array.isArray(requestUser?.roles) ? requestUser.roles : [];
+    const isStaff = roles.some((r) => r && r !== 'CLIENT');
+
     const product = await this.prisma.product.findFirst({
-      where: { id, deletedAt: null },
+      where: isStaff ? { id, deletedAt: null } : { id, deletedAt: null, status: 'ACTIVE' },
       include: {
         category: true,
         brand: true,
-        supplier: true,
+        ...(isStaff ? { supplier: true } : {}),
         images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }] },
         variants: {
           orderBy: { sortOrder: 'asc' },
           include: {
-            stock: {
-              include: { warehouse: true },
-            },
+            stock: isStaff
+              ? { include: { warehouse: true } }
+              : { select: { physicalQty: true, reservedQty: true } },
           },
         },
       },
@@ -795,6 +804,24 @@ export class ProductsService {
 
     if (!product) {
       throw new NotFoundException('Produit introuvable');
+    }
+
+    if (!isStaff) {
+      const variants = (product.variants || []).map(({ purchasePrice: _pp, stock, ...v }: any) => {
+        const available = Array.isArray(stock)
+          ? stock.reduce((s, r) => s + Math.max(0, Number(r.physicalQty || 0) - Number(r.reservedQty || 0)), 0)
+          : 0;
+        return { ...v, stockQuantity: available };
+      });
+      const { basePrice: _bp, ...publicProduct } = product as any;
+      return {
+        ...publicProduct,
+        variants,
+        sellingPrice: Number(product.sellingPrice),
+        discountPrice: product.discountPrice ? Number(product.discountPrice) : null,
+        taxRate: Number(product.taxRate),
+        weight: product.weight ? Number(product.weight) : null,
+      };
     }
 
     return {

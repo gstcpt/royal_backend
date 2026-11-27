@@ -34,8 +34,16 @@ export class CouponsController {
   @Public()
   @Get('public')
   @ApiOperation({ summary: 'Codes promos actifs publics (Vitrine / Espace Client)' })
-  findPublicActive() {
-    return this.couponsService.findAll({ isActive: true, page: 1, limit: 1000 });
+  async findPublicActive() {
+    const res = await this.couponsService.findAll({ isActive: true, page: 1, limit: 200 });
+    const safeData = (res?.data || [])
+      .filter((c: any) => c.targetType !== 'CUSTOMER')
+      .map(({ targetIds: _omitTargets, ...rest }: any) => rest);
+    return {
+      ...res,
+      data: safeData,
+      meta: res?.meta ? { ...res.meta, total: safeData.length } : res?.meta,
+    };
   }
 
   @Get()

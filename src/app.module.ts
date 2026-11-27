@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerModule } from '@nestjs/throttler';
-import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PrismaModule } from './database/prisma.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -26,7 +26,6 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { StorefrontCmsModule } from './modules/storefront-cms/storefront-cms.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
-import { APP_INTERCEPTOR } from '@nestjs/core';
 import { validateEnvironment } from './config/env.validation';
 
 @Module({
@@ -39,7 +38,7 @@ import { validateEnvironment } from './config/env.validation';
     ThrottlerModule.forRoot([
       {
         ttl: 60000,
-        limit: 100,
+        limit: 240,
       },
     ]),
     PrismaModule,
@@ -69,6 +68,10 @@ import { validateEnvironment } from './config/env.validation';
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
     },
     {
       provide: APP_INTERCEPTOR,

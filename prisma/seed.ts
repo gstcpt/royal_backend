@@ -106,7 +106,6 @@ async function main() {
   const rootUser = await prisma.user.upsert({
     where: { email: rootEmail },
     update: {
-      passwordHash: hashedPassword,
       firstName: 'Master',
       lastName: 'Root',
       isActive: true,
@@ -156,7 +155,7 @@ async function main() {
     const pwHash = await argon2.hash(acc.password);
     const u = await prisma.user.upsert({
       where: { email: acc.email },
-      update: { passwordHash: pwHash, firstName: acc.firstName, lastName: acc.lastName, isActive: true, isEmailVerified: true },
+      update: { firstName: acc.firstName, lastName: acc.lastName, isActive: true, isEmailVerified: true },
       create: { email: acc.email, passwordHash: pwHash, firstName: acc.firstName, lastName: acc.lastName, isActive: true, isEmailVerified: true },
     });
     const r = await prisma.role.findUnique({ where: { name: acc.role } });

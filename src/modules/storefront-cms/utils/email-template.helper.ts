@@ -222,7 +222,7 @@ export const DEFAULT_LUXURY_EMAIL_TEMPLATES: LuxuryEmailTemplateSeed[] = [
     bodyHtmlAr: `
       <p style="margin:0 0 12px;font-size:15px;color:#1D232E;">مرحباً <strong>{{firstName}}</strong>،</p>
       <p style="margin:0 0 16px;font-size:14px;line-height:1.8;color:#475569;">
-        تلقينا طلباً للمساعدة في استرجاع كلمة المرور الخاصة بحسابك <strong>{{email}}</strong>. لدواعي الأمان، يمكنك إتمام العملية عبر الرابط الآمن ({{expireTime}}) أو التواصل مع فريق الدعم.
+        تلقينا طلباً للمساعدة في استرجاع كلمة المرور الخاصة بحسابك <strong dir="ltr" style="direction:ltr;unicode-bidi:embed;">{{email}}</strong>. لدواعي الأمان، يمكنك إتمام العملية عبر الرابط الآمن ({{expireTime}}) أو التواصل مع فريق الدعم.
       </p>
       <div style="margin:22px 0;padding:16px 20px;border-radius:14px;background:#FBF9F4;border-right:4px solid #C59B27;">
         <p style="margin:0;font-size:13px;color:#1D232E;line-height:1.7;">
@@ -262,7 +262,7 @@ export const DEFAULT_LUXURY_EMAIL_TEMPLATES: LuxuryEmailTemplateSeed[] = [
         تمت إعادة تعيين كلمة المرور الخاصة بحسابك على منصة <strong>{{appName}}</strong> من طرف الإدارة. إليك بيانات الدخول المؤقتة:
       </p>
       <div style="margin:20px 0;padding:18px;border-radius:14px;background:#FBF6E8;border:1px solid #E6D6A6;text-align:center;">
-        <div style="font-size:11px;color:#9A7414;font-weight:800;margin-bottom:6px;">البريد الإلكتروني: {{email}}</div>
+        <div style="font-size:11px;color:#9A7414;font-weight:800;margin-bottom:6px;">البريد الإلكتروني: <span dir="ltr" style="direction:ltr;unicode-bidi:embed;">{{email}}</span></div>
         <span style="font-family:'Courier New',monospace;font-size:22px;font-weight:900;letter-spacing:1.5px;color:#1D232E;direction:ltr;unicode-bidi:embed;">{{generatedPassword}}</span>
       </div>
       <p style="margin:0 0 16px;font-size:12px;color:#64748B;line-height:1.7;">
@@ -447,10 +447,18 @@ export function escapeHtml(input: string): string {
     .replace(/'/g, '&#39;');
 }
 
+export function sanitizeSafeEmailUrl(raw: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return '#';
+  if (s.startsWith('/') || /^https?:\/\//i.test(s) || /^mailto:/i.test(s)) {
+    return escapeHtml(s);
+  }
+  return '#';
+}
+
 export function formatPlainTextToHtml(text: string): string {
   const trimmed = String(text || '').trim();
   if (!trimmed) return '';
-  if (/<[a-z][\s\S]*>/i.test(trimmed)) return trimmed;
   return escapeHtml(trimmed).replace(/\r?\n/g, '<br/>');
 }
 
@@ -470,16 +478,19 @@ export function interpolateTemplateString(
   variables: Record<string, any>,
   options: { rawHtmlKeys?: Set<string> } = {},
 ): string {
-  const rawHtmlKeys = options.rawHtmlKeys || new Set(['customNoteBlock', 'messageBody', 'replyBody']);
+  const rawHtmlKeys = options.rawHtmlKeys || new Set(['customNoteBlock', 'documentsList']);
   return String(templateText || '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, rawKey) => {
     const val = variables[rawKey];
     if (val === undefined || val === null) return '';
     const str = String(val);
     if (rawHtmlKeys.has(rawKey)) {
+      return str;
+    }
+    if (rawKey === 'messageBody' || rawKey === 'replyBody') {
       return formatPlainTextToHtml(str);
     }
     if (/Url$|Link$/i.test(rawKey)) {
-      return escapeHtml(str);
+      return sanitizeSafeEmailUrl(str);
     }
     return escapeHtml(str);
   });
@@ -537,7 +548,7 @@ export function wrapWithLuxuryEmailShell(opts: {
     : 'Merci pour votre confiance — Courriel émis via la plateforme officielle Royal.';
 
   return `
-<div data-royal-email-shell="1" dir="${dir}" style="background:#F7F5EE;padding:28px 14px;font-family:${fontFamily};color:#1D232E;">
+<div data-royal-email-shell="1" dir="${dir}" lang="${isAr ? 'ar' : 'fr'}" style="background:#F7F5EE;padding:28px 14px;font-family:${fontFamily};color:#1D232E;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;margin:0 auto;background:#FFFFFF;border:1px solid #E6E1D6;border-radius:20px;overflow:hidden;">
     <tr>
       <td style="height:5px;background:linear-gradient(90deg,#9A7414 0%,#C59B27 50%,#E6D6A6 100%);font-size:0;line-height:0;">&nbsp;</td>
@@ -710,11 +721,13 @@ export async function renderLocalizedEmail(
   const compiledInnerHtml = interpolateTemplateString(rawBody, mergedVars);
   const htmlBody =
     params.wrapInShell === false
-      ? compiledInnerHtml
+      ? useAr
+        ? `<div dir="rtl" lang="ar">${compiledInnerHtml}</div>`
+        : compiledInnerHtml
       : wrapWithLuxuryEmailShell({
           appName: identity.appName,
           logoUrl: identity.logoUrl,
-          badgeText: params.badgeText || tpl?.name,
+          badgeText: params.badgeText || (useAr ? 'رسالة رسمية • رويال' : tpl?.name),
           innerHtml: compiledInnerHtml,
           locale: requestedLocale,
           phone: identity.phone,

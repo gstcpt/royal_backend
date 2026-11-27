@@ -12,6 +12,7 @@ import {
   HttpStatus,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiTags,
   ApiOperation,
@@ -35,6 +36,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Connexion utilisateur et émission de jetons JWT' })
@@ -76,6 +78,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Inscription client avec envoi obligatoire du code de vérification par email' })
@@ -85,15 +88,18 @@ export class AuthController {
     @Body() registerDto: RegisterDto,
     @Req() req: Request,
   ) {
+    const acceptLang = String(req.headers['accept-language'] || '').toLowerCase();
     const metadata = {
       ipAddress: req.ip || (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
       userAgent: req.headers['user-agent'] || 'Unknown',
+      locale: (acceptLang.startsWith('ar') ? 'AR' : 'FR') as 'FR' | 'AR',
     };
 
     return this.authService.register(registerDto, metadata);
   }
 
   @Public()
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Vérification du code OTP email et activation session client' })
@@ -102,10 +108,12 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const acceptLang = String(req.headers['accept-language'] || '').toLowerCase();
     const metadata = {
       ipAddress: req.ip || (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
       userAgent: req.headers['user-agent'] || 'Unknown',
       deviceInfo: (req.headers['x-device-info'] as string) || null,
+      locale: (acceptLang.startsWith('ar') ? 'AR' : 'FR') as 'FR' | 'AR',
     };
 
     const result = await this.authService.verifyEmailCode(dto.email, dto.code, metadata);
@@ -130,19 +138,23 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('resend-verification')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Renvoyer le code de vérification par email' })
-  async resendVerification(@Body() dto: ResendVerificationDto) {
-    return this.authService.resendVerificationCode(dto.email);
+  async resendVerification(@Body() dto: ResendVerificationDto, @Req() req: Request) {
+    const locale = String(req.headers['accept-language'] || '').toLowerCase().startsWith('ar') ? 'AR' : 'FR';
+    return this.authService.resendVerificationCode(dto.email, locale);
   }
 
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Envoyer un courriel de procédure de récupération de mot de passe' })
-  async forgotPassword(@Body() dto: ResendVerificationDto) {
-    return this.authService.requestPasswordResetEmail(dto.email);
+  async forgotPassword(@Body() dto: ResendVerificationDto, @Req() req: Request) {
+    const locale = String(req.headers['accept-language'] || '').toLowerCase().startsWith('ar') ? 'AR' : 'FR';
+    return this.authService.requestPasswordResetEmail(dto.email, locale);
   }
 
   @Public()

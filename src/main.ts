@@ -39,7 +39,6 @@ async function createNestApp() {
         !origin ||
         allowedOrigins.includes('*') ||
         allowedOrigins.includes(origin) ||
-        origin.endsWith('.vercel.app') ||
         process.env.NODE_ENV !== 'production'
       ) {
         callback(null, true);

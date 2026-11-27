@@ -33,7 +33,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message: typeof message === 'object' && message !== null && 'message' in message
         ? (message as any).message
         : message,
-      error: exception instanceof Error ? exception.name : 'UnknownError',
+      error:
+        status >= 500
+          ? 'InternalServerError'
+          : exception instanceof Error
+          ? exception.name
+          : 'UnknownError',
       meta: {
         timestamp: new Date().toISOString(),
         path: request.url,
